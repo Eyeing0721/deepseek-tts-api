@@ -1,0 +1,40 @@
+{
+  "name": "deepseek-tts-api",
+  "version": "0.1.0",
+  "description": "非官方 DeepSeek 网页版朗读（TTS）客户端：WebSocket 协议实现 + CLI",
+  "type": "module",
+  "license": "MIT",
+  "author": "Eyeing0721",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "dstts": "bin/dstts.mjs"
+  },
+  "main": "src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "bin",
+    "src",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "voices": "node bin/dstts.mjs voices",
+    "probe": "node bin/dstts.mjs probe"
+  },
+  "keywords": [
+    "deepseek",
+    "tts",
+    "text-to-speech",
+    "websocket",
+    "cli"
+  ],
+  "dependencies": {},
+  "devDependencies": {}
+}

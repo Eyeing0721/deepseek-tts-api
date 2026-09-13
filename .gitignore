@@ -1,0 +1,10 @@
+node_modules/
+*.wav
+*.pcm
+.env
+.env.*
+!.env.example
+*.mp3
+*.opus
+.recon/
+npm-debug.log*
