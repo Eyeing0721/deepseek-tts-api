@@ -94,11 +94,14 @@ export async function createSession({
       { kind: 'protocol', code: data.biz_code ?? json.code, details: json },
     );
   }
-  const id = biz?.chat_session?.id;
+  // 实测（2026-09-14，真账号）响应是 data.biz_data.id，不是 chat_session.id。
+  // 两种都认：官方前端不同版本包过一层。
+  const id = biz?.id ?? biz?.chat_session?.id;
   if (!id) {
-    throw protocolError('建会话返回里没有 biz_data.chat_session.id', undefined, { raw: json });
+    throw protocolError('建会话返回里没找到会话 id（试过 biz_data.id 和 biz_data.chat_session.id）',
+      undefined, { raw: json });
   }
-  return { id, title: biz.chat_session.title ?? null, raw: json };
+  return { id, title: biz?.title ?? biz?.chat_session?.title ?? null, raw: json };
 }
 
 /** 删会话。失败不抛，返回 false —— 清理失败不该把主流程搞崩。 */

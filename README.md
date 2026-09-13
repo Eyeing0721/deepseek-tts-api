@@ -118,6 +118,31 @@ Node v25.8.0
 
 退出码 1。加 `--json` 拿结构化报告。
 
+## 验证到哪一步了
+
+**2026-09-14 拿真 token 打真服务端跑过一遍**，不是只有离线假 fetch：
+
+```
+$ dstts voices        # 四个音色的语言数和 demo 地址全部实拉
+  mira 29 种 / echo 29 种 / stella 10 种 / tide 10 种
+$ dstts probe         # 音色 OK（123ms）→ 取票 OK（36ms，600s）→ 空 id 试连 code=1006（预期）
+$ dstts say "…" -o say-test.wav
+  会话建好 → PoW 解出（97691 次尝试，735ms）→ 文本发进去 → message_id=2
+  → ws 合成 → 48 帧 / 223.6 KiB / 4.77s → 念到的正是原文 → 临时会话已删
+  say-test.wav: pcm_s16le / 24000 Hz / 单声道 / 4.771s / mean_volume -21.3 dB
+```
+
+真跑抓出两个只有真跑才能发现的东西：
+
+1. **建会话返回的会话 id 在 `data.biz_data.id`**，不是 `biz_data.chat_session.id`（后一个是想当然）。
+   这个错误离线假 fetch 抓不到——假响应是照着自己的假设编的。已修，两种路径都认。
+2. **服务端不念用户消息**：`via=user` 合成被拒 `code=6 (NO_CONTENT)`。
+   所以 `--via reply`（让模型复述一遍再念）才是可行路径，默认的 `auto` 会先撞一次再回退。
+   想省掉那次白跑就显式 `--via reply`，快约 1 秒。
+
+还没验的：`code=4`（额度）/ `code=5`（限流）没触发过、断线续传没试、opus 每个包多少采样没确认。
+完整清单在 `VERIFY.md`。
+
 ## read：真的合成一段
 
 ```bash

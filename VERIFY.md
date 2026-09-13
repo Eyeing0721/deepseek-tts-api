@@ -510,3 +510,127 @@ tone-440.wav                        24044 字节，上面那个 PCM 套的头（
 产物那几个 chunk（`main.*.js`、`76608.*.js`、`37627.*.js`、`8138.*.js`、`sha3_wasm_bg.*.wasm`）
 只在系统临时目录里放着做对拍用，**没有进仓库** —— 那是别人的代码，不该往里塞。
 golden vector 已经把结论固化了。
+
+---
+
+# 真账号端到端实测（2026-09-14）
+
+上面那些都是"离线假 fetch + 对拍产物"。这一节是真跑：真 token 打真服务端。
+
+token 取自一份**独立的 Edge 配置副本**（复制 `Local State` + `Default/Local Storage`，
+另起一个带 `--remote-debugging-port` 的 headless Edge，用 CDP 读 `localStorage.userToken`）。
+没碰正在用的浏览器，副本用完删掉。
+
+## 上面第 1、2、3、4 条现在有答案了
+
+```
+$ dstts voices        # 带 token
+默认 mira   当前 mira
+  mira     贝壳   female  百变活泼   29 种语言  试听 29 个  (默认)
+  echo     白浪   male    明朗坚定   29 种语言  试听 29 个
+  stella   海星   female  俏皮甜美   10 种语言  试听 10 个
+  tide     暗潮   male    低沉浑厚   10 种语言  试听 10 个
+```
+
+**`voices` 是要登录态的**（第 13 条里"无 token 拿不到全部试听地址"得到印证），
+四个音色的语言数和 demo 地址这轮全拿到了。
+
+```
+$ dstts probe
+1) 音色接口 OK（123ms）
+2) 取票 OK（36ms）  票 36 字符  expires_in_secs=600
+3) 空 id 试连 握手没成  close code=1006
+```
+
+第 3 步符合预期，`probe` 也明说了"空 id 试连不代表能合成"，没骗人。
+
+## `dstts say` 第一次真跑，一次抓出两个真 bug
+
+### bug 1：会话 id 的路径猜错了（已修）
+
+```
+建会话返回里没有 biz_data.chat_session.id
+```
+
+把原始响应打出来才看到：
+
+```json
+{ "code": 0, "data": { "biz_code": 0, "biz_data": {
+    "id": "d9a0169a-d3cb-48c9-a2ae-b51f3d4dde0e",
+    "seq_id": 211483071, "agent": "chat", "model_type": "default",
+    "current_message_id": null, ... } } }
+```
+
+**是 `data.biz_data.id`，不是 `biz_data.chat_session.id`。**
+
+这个错误**离线假 fetch 永远抓不到**——假响应是照着自己的假设编的，
+假设错了，测试只会一起错。现在两种路径都认。
+
+### 不是 bug，但之前只能猜：服务端不念用户消息（第 4 条）
+
+```
+via=user 合成被拒（code=6）：服务端 finish 带错误码：code=6(NO_CONTENT)
+  msg=no_content —— 这条消息没有可朗读的正文
+```
+
+**结论：服务端只念模型的消息，不念用户的。** 和我上面猜的 `code=2` 或 `code=6` 对上了，是 6。
+`--via reply`（让模型复述一遍再念）是唯一可行路径；默认的 `auto` 会先撞一次 code=6 再回退。
+代价：`--via reply` 少一次建会话 + 一次 PoW，快约 1 秒。
+
+## 成功那次的完整输出
+
+```
+文本 25 字，方式 via=auto，format=pcm
+  会话 7b43ae47-2ff5-4be5-a742-96a11621a7ef 建好了
+  PoW 解出来了：answer=97690，试了 97691 次，算 735ms（含取 challenge 共 789ms）
+  正在把文本发进会话…
+  message_id=2，SSE 读了 1.2 KiB
+  ws 已连接
+  已删掉临时会话 7b43ae47-2ff5-4be5-a742-96a11621a7ef
+  合成 OK：48 帧 / 223.6 KiB / 4.77s  voice=mira format=pcm
+  实际念到的正文："这是端到端测试，如果你听到这句话说明整条链路通了。"
+  封装 WAV → say-test.wav（223.7 KiB）
+  总耗时 7111ms
+```
+
+**PoW 对上了服务端。** 这是整件事里最悬的一环——上面第 3 条只能说"我的实现跟产物 worker
+逐位一致"，现在能说"服务端也认这套"，否则 completion 那步根本过不去。
+这一轮的难度：试了 97691 次，735ms（第 5 条的担心可以放下了，量级正常）。
+
+## 产物校验
+
+```
+$ ffprobe say-test.wav
+codec_name=pcm_s16le
+sample_rate=24000
+channels=1
+duration=4.770958
+size=229050
+
+$ ffmpeg -i say-test.wav -af volumedetect -f null -
+mean_volume: -21.3 dB
+max_volume: -7.9 dB
+```
+
+24000 Hz / 单声道 / s16le，跟协议文档一致；-21.3 dB 说明是真语音不是静音；
+时长 4.771s 和上面报的 4.77s 对得上。
+
+## 临时会话没有残留
+
+`say` 每跑一次建一个会话，默认念完就删。跑完查账号：
+
+```
+最近 3 小时创建的: 6   （全是用户自己的会话，标题正常）
+无标题（疑似临时）会话: []
+干净，没有残留
+```
+
+成功路径和失败路径（`via=user` 被拒那次）的清理都生效了。
+
+## 这一轮之后还剩的不确定
+
+上面 5~16 条基本照旧，只补两条：
+
+- `--via user` 被拒是**这台账号 + 当前服务端版本**的行为，换版本可能变（`auto` 就是防这个的）。
+- 指纹头依然不伪造，这一轮服务端也没要。
+- 续传、opus 分帧语义还是没验；错误码 4（额度）/ 5（限流）没触发过。
