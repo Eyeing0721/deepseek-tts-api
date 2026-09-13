@@ -19,6 +19,7 @@ import {
   listVoices,
   numericOptions,
   parseArgv,
+  parseHeaderList,
   parseWavHeader,
   pcmToWav,
   probeProtocol,
@@ -26,7 +27,9 @@ import {
   requirePositional,
   resolveDemoUrl,
   resolveToken,
+  say,
   synthesize,
+  usageError,
 } from '../src/index.mjs';
 
 const VERSION_FALLBACK = '0.0.0';
@@ -39,6 +42,8 @@ const USAGE = `dstts —— 非官方 DeepSeek 网页版朗读（TTS）客户端
   dstts probe [--session <id> --message <id>]    取票 + 试连，打印判决
   dstts read --session <id> --message <id>       从已有会话消息合成
              [-o out.wav] [--voice mira] [--format pcm|opus]
+  dstts say <文本> [-o out.wav]                  随便给一段文本，现场造一个一次性会话念出来
+             [--voice mira] [--via user|reply|auto] [--keep]
   dstts wav <in.pcm> <out.wav> [--rate 24000] [--channels 1]
   dstts help
 
@@ -56,8 +61,16 @@ const USAGE = `dstts —— 非官方 DeepSeek 网页版朗读（TTS）客户端
   -h, --help           这个
       --version        版本号
 
-没有正文参数这件事是真的：请求里只有 chat_session_id + message_id，
-读什么文字由服务端从你的会话消息里取。
+say 专属：
+      --via <模式>     user（默认，念的就是原文，最省）/ reply（让模型复述）/
+                       auto（先 user，不成再 reply）
+      --keep           念完不删那个临时会话（默认删）
+      --wait <ms>      等消息落库的上限，默认 60000
+      --max-iterations <n>  PoW 搜索上限，默认 5000000
+      --header "名: 值"     额外请求头，可以给多次（官方前端还带一批指纹头，本包不伪造）
+
+没有正文参数这件事是真的：/chat/tts 的请求里只有 chat_session_id + message_id，
+读什么文字由服务端从你的会话消息里取 —— 所以 say 干的就是先把文本变成一条消息。
 `;
 
 async function readPkgVersion() {
@@ -274,6 +287,79 @@ async function cmdRead(parsed, ctx) {
   return 0;
 }
 
+async function cmdSay(parsed, ctx) {
+  const text = parsed.options.text ?? parsed.positionals.join(' ');
+  if (!text || !text.trim()) {
+    throw usageError('say 需要文本：`dstts say "要念的内容"` 或者 --text "..."');
+  }
+  const via = parsed.options.via ?? 'auto';
+  const { format = 'pcm' } = parsed.options;
+  const { timeout, wait, 'max-iterations': maxIterations } = numericOptions(parsed.options);
+  const extraHeaders = parseHeaderList(parsed.options.header);
+  const token = assertToken(resolveToken(parsed.options.token));
+
+  const ext = format === 'pcm' ? 'wav' : 'opus';
+  const out = parsed.options.out ?? `ds-say-${Date.now()}.${ext}`;
+
+  process.stdout.write(`文本 ${text.length} 字，方式 via=${via}，format=${format}\n`);
+  process.stdout.write('  1) 建一次性会话 → 2) 解 PoW → 3) 把文本发进去 → 4) 取 message_id → 5) 合成\n');
+
+  const t0 = Date.now();
+  const result = await say({
+    text,
+    via,
+    format,
+    token,
+    voice: parsed.options.voice,
+    keepSession: Boolean(parsed.options.keep),
+    ...(timeout ? { timeoutMs: timeout } : {}),
+    ...(wait ? { waitTimeoutMs: wait } : {}),
+    ...(maxIterations ? { maxIterations } : {}),
+    extraHeaders,
+    onProgress: (p) => {
+      if (p.step === 'session') process.stdout.write(`  会话 ${p.sessionId} 建好了\n`);
+      if (p.step === 'pow-done') {
+        process.stdout.write(
+          `  PoW 解出来了：answer=${p.answer}，试了 ${p.answer + 1} 次，算 ${p.solveMs}ms（含取 challenge 共 ${p.totalMs}ms）\n`,
+        );
+      }
+      if (p.step === 'completion') process.stdout.write('  正在把文本发进会话…\n');
+      if (p.step === 'message') {
+        process.stdout.write(
+          `  message_id=${p.messageId}${p.stopped ? '（已把后续生成掐掉）' : ''}` +
+            `${p.streamBytes !== undefined ? `，SSE 读了 ${fmtBytes(p.streamBytes)}` : ''}\n`,
+        );
+      }
+    },
+    log: (s) => process.stdout.write(`  ${s}\n`),
+  });
+
+  process.stdout.write(
+    `  合成 OK：${result.frameCount} 帧 / ${fmtBytes(result.bytes)} / ${fmtDuration(result.durationSec)}` +
+      `  voice=${result.voiceId ?? '?'} format=${result.format}\n`,
+  );
+  process.stdout.write(`  实际念到的正文：${JSON.stringify(result.scratch.content.slice(0, 80))}${result.scratch.content.length > 80 ? '…' : ''}\n`);
+
+  if (result.format === 'pcm') {
+    const wav = pcmToWav(result.audio, {
+      sampleRate: result.sampleRate ?? PCM.sampleRate,
+      channels: result.channels ?? PCM.channels,
+      bitsPerSample: result.bitsPerSample ?? PCM.bitsPerSample,
+    });
+    await writeFile(out, wav);
+    process.stdout.write(`  封装 WAV → ${out}（${fmtBytes(wav.length)}）\n`);
+  } else {
+    await writeFile(out, result.audio);
+    process.stdout.write(`  写出裸 opus 包 → ${out}（${fmtBytes(result.audio.length)}）\n`);
+    process.stdout.write('  提醒：opus 是裸包，没有 Ogg 容器，多数播放器打不开。\n');
+  }
+  process.stdout.write(`  总耗时 ${Date.now() - t0}ms\n`);
+  if (result.scratch.attempts > 1) {
+    process.stdout.write(`  换了 ${result.scratch.attempts} 种方式才成：${JSON.stringify(result.scratch.problems)}\n`);
+  }
+  return 0;
+}
+
 async function cmdWav(parsed, ctx) {
   const input = requirePositional(parsed, 0, 'in.pcm', '裸 PCM 文件');
   const output = requirePositional(parsed, 1, 'out.wav', '输出 WAV 路径');
@@ -305,6 +391,7 @@ const HANDLERS = {
   demo: cmdDemo,
   probe: cmdProbe,
   read: cmdRead,
+  say: cmdSay,
   wav: cmdWav,
 };
 

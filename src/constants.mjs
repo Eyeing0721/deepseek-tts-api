@@ -21,6 +21,16 @@ export const ENDPOINTS = Object.freeze({
   voices: '/api/v0/chat/tts/voices',
   /** POST，body {"voice_id":"<id>"}，需要登录态；服务端会话级状态 */
   voice: '/api/v0/chat/tts/voice',
+  /** POST，body {}，返回 biz_data.chat_session.id —— 建一个新会话 */
+  sessionCreate: '/api/v0/chat_session/create',
+  /** POST，body {"chat_session_ids":[...]} —— 删会话 */
+  sessionDelete: '/api/v0/chat_session/delete',
+  /** GET ?chat_session_id=<id> —— 拉会话消息列表 */
+  historyMessages: '/api/v0/chat/history_messages',
+  /** POST，body 见 src/session.mjs —— 往会话里发一条消息（需要 PoW） */
+  completion: '/api/v0/chat/completion',
+  /** POST，body {"target_path":"..."} —— 取 PoW challenge */
+  powChallenge: '/api/v0/chat/create_pow_challenge',
 });
 
 /** 网页端恒定值。App 有语音对话模式，网页端没有。 */

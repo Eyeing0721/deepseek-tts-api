@@ -12,7 +12,7 @@ import { DeepSeekTtsError, authError, codeHint, codeName, protocolError, usageEr
 export const TOKEN_ENV = 'DS_TOKEN';
 
 /** 官方前端发的头。别的头要不要加没有实测过 —— 目前这套在 2026-09-12 是通的。 */
-function jsonHeaders(token) {
+export function jsonHeaders(token) {
   const h = {
     'content-type': 'application/json',
     accept: 'application/json, text/plain, */*',

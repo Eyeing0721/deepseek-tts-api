@@ -20,6 +20,8 @@ node bin/dstts.mjs voices
 - 想在脚本里批量把会话里的回答读出来 → 直接调 `synthesize()`
 - 想看看自己账号到底有没有被放行 → `dstts probe`
 - 只想听一下四个音色什么声 → `dstts demo mira`，连登录都不用
+- **想让它念一段我自己写的文本 → `dstts say "..."`**，它会在你会话里现场造一条消息，
+  念完删掉（这就是绕开「请求里没有正文」那条限制的办法）
 
 协议细节在 `docs/PROTOCOL.md`，是从线上产物里读出来的，不是猜的。
 
@@ -217,15 +219,49 @@ catch (e) {
 表里是逐个在真实账号上核对过的。海星/暗潮只支持 `ar en id ja ko ms th vi yue zh` 这 10 种
 （这条出自逆向备忘，我没逐语言打接口验过）。
 
+## say：随便给一段文本，现场造一条消息念出来
+
+```bash
+dstts say "今天天气不错，适合睡觉。"
+dstts say "念这句" --voice tide -o tide.wav
+dstts say "长文本……" --via reply        # 让模型复述，取它那条
+dstts say "别删会话" --keep              # 默认念完会把临时会话删掉
+```
+
+这是绕开「请求里没有正文」那条限制的办法。既然读什么由服务端按 `message_id` 去会话里查，
+那就现场造一个一次性会话、把文本塞进去、拿着 id 去念，念完把会话删掉。全程大概是这样：
+
+```
+建会话 → 取 PoW challenge → 解工作量证明 → 把文本作为一条消息发进去
+      → 拉 history 拿到 message_id → 合成 → 删会话
+```
+
+关于 PoW：DeepSeek 的 completion 接口**强制要求**工作量证明，官方前端解不出来是直接不发请求的。
+算法叫 `DeepSeekHashV1`，是它自己的一套哈希 —— 既不是 SHA3-256 也不是 Keccak-256，
+`node:crypto` 替代不了，只能照抄。这件我做得比较实：把产物里的 PoW worker 用 `node:vm` 起起来
+当参照物，本包的实现跟它 **13 组 golden vector + 120 组随机串逐位一致**，
+而且拿本包的哈希出题，产物的 JS worker 和 WASM worker 都解得出来。细节和坑（比如 prefix 用的是
+`expire_at` 而不是 `signature`）写在 `docs/PROTOCOL.md` 第 9 节。
+
+`--via` 有三种：
+
+- `user`（默认走 auto 时先试它）：只等我们自己发的那条用户消息落库，然后马上把生成掐掉。
+  便宜，念的就是原文一个字不差。
+- `reply`：让模型把话说完，念它复述出来的那条。可能和原文有出入。
+- `auto`（默认）：先 `user`，被 `code=2` / `code=6` 挡了就换 `reply` 重来。
+
+**说清楚：这条路我一次都没在真账号上跑过**（没有 token）。请求体和请求头是照产物抄的，
+离线链路用假 fetch 演通了 17 个用例，但服务端认不认，只有你拿真 token 试了才知道。
+
 ## 限制，以及一些坑
 
-### 请求里没有正文，这是最大的限制
+### 请求里没有正文
 
 合成请求里只有 `chat_session_id` + `message_id`，**没有任何文本参数**。读哪段文字是服务端拿这
 两个 id 去你自己的会话里查出来的。
 
-所以它读不了任意字符串。想让它念一段文字，得先让那段文字变成你会话里的一条消息；`message_id`
-传错基本就是 `code=2` 或者 `code=6`。
+所以单看 `read` 这条命令，它读不了任意字符串；`message_id` 传错基本就是 `code=2` 或者 `code=6`。
+要念任意文本就用 `dstts say`（上一节），它会先给你造一条消息出来。
 
 ### ticket 是一次性的
 
@@ -233,6 +269,15 @@ catch (e) {
 
 我刚写循环的时候就栽在这：第一轮好好的，第二轮开始永远连不上，还查不出原因。现在每次建连前都
 重新取票。
+
+### say 那条路的坑
+
+- 每念一段文本就会在你会话列表里留一个会话（默认念完会删，删失败会在输出里告诉你）。
+- 要过一次工作量证明，本地要算一会儿。`difficulty` 是服务端给的搜索上界，我给的上限是 500 万次
+  迭代，超了会明确报错。
+- 官方前端还会带一批浏览器指纹头（`x-hif-leim` / `x-hif-dliq` / `x-client-*`），本包**不伪造**它们。
+  服务端哪天真要，用 `--header "名字: 值"` 自己塞。
+- `via=user` 到底能不能念，我没验过。真被拒了就用 `--via reply`。
 
 ### 别的
 
@@ -271,17 +316,20 @@ dstts read --session ... --message ...
 ## 目录
 
 ```
-bin/dstts.mjs        CLI，只做参数 -> 调库 -> 打印
-src/constants.mjs    端点、音色表、错误码、pcm 参数
-src/http.mjs         取票 / 音色列表 / 切音色 / 下 demo
-src/frames.mjs       4 字节大端 seq 解析、收帧器、ws 地址
-src/tts.mjs          synthesize()
-src/wav.mjs          PCM -> WAV
-src/probe.mjs        probeProtocol()
-src/cli-args.mjs     参数解析（纯函数，能单独测）
-test/                node --test，86 个用例
-docs/PROTOCOL.md     协议细节 + 没验证到的东西
-VERIFY.md            本机跑过的验证记录，含原始输出
+bin/dstts.mjs          CLI，只做参数 -> 调库 -> 打印
+src/constants.mjs      端点、音色表、错误码、pcm 参数
+src/http.mjs           取票 / 音色列表 / 切音色 / 下 demo
+src/frames.mjs         4 字节大端 seq 解析、收帧器、ws 地址
+src/tts.mjs            synthesize()
+src/wav.mjs            PCM -> WAV
+src/probe.mjs          probeProtocol()
+src/deepseek-hash.mjs  DeepSeekHashV1（PoW 用的自定义哈希，照产物抄的）
+src/pow.mjs            取 challenge / 解 PoW / 拼 X-DS-PoW-Response
+src/session.mjs        建一次性会话、把文本塞进去、say() 编排
+src/cli-args.mjs       参数解析（纯函数，能单独测）
+test/                  node --test，126 个用例
+docs/PROTOCOL.md       协议细节 + 没验证到的东西
+VERIFY.md              本机跑过的验证记录，含原始输出
 ```
 
 ## 测试
@@ -290,9 +338,16 @@ VERIFY.md            本机跑过的验证记录，含原始输出
 npm test        # 就是 node --test
 ```
 
-86 个用例，不需要网络也不需要 token：WAV 头是拿纸笔算出来的期望字节逐一对比的，
-`4` 字节大端 seq、乱序、重复、缺帧都有覆盖，`synthesize()` 用假 WebSocket + 假 fetch
-把服务端演了一遍（ready → 帧 → finish），错误码、ack 口径、abort 也都有对应用例。
+126 个用例，不需要网络也不需要 token：
+
+- WAV 头是拿纸笔算出来的期望字节逐一对比的。
+- `4` 字节大端 seq、乱序、重复、缺帧都有覆盖。
+- `synthesize()` 用假 WebSocket + 假 fetch 把服务端演了一遍（ready → 帧 → finish），
+  错误码、ack 口径、abort 也都有对应用例。
+- **PoW 有 13 组 golden vector**（从产物 worker 里跑出来的真值）+ 120 组随机串对拍的记录，
+  还有求解、prefix 口径、请求头这些用例。
+- `say()` 整条链路（建会话 → PoW → completion → history → 合成 → 删会话）用假 fetch 跑通，
+  包括 `--keep`、`auto` 回退、失败时清理这些分支。
 
 注意 Node 25 起 `node --test test/` 不再接受目录参数，直接 `node --test` 就行。
 

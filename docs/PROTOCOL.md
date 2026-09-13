@@ -373,6 +373,8 @@ buildUrl(wsEndpoint, streamParams, { ticket, mode: "manual", format }, {
 - 想让它读一段文字，得先让那段文字成为会话里的一条消息。
 - 消息必须是服务端认可的、有正文的那条（`message_id` 传错大概率拿到 `code=2` 或 `code=6`）。
 
+第 9 节写了怎么现场造这么一条消息出来，把"读任意文本"这件事圆回来。
+
 ### mode 恒为 manual
 
 `mode=manual` 是网页端写死的值。App 那边有语音对话模式，网页端没有。
@@ -384,7 +386,135 @@ buildUrl(wsEndpoint, streamParams, { ticket, mode: "manual", format }, {
 - `format=opus` 给的是裸包，需要自己封装才能播。
 - 朗读受服务端额度/风控约束（4 / 5 / 12 这些码）。
 
-## 9. 没验证到的部分
+## 9. 现场造一条消息（把「没有正文」绕过去）
+
+既然读什么由服务端按 `message_id` 去会话里查，那就**先造一个会话、把文本塞进去、拿着 id 去念**。
+这条路要三个接口加一道工作量证明。
+
+```
+POST /api/v0/chat_session/create          {}
+  -> data.biz_data.chat_session.id
+
+POST /api/v0/chat/create_pow_challenge    {"target_path":"/api/v0/chat/completion"}
+  -> data.biz_data.challenge = {algorithm, challenge, salt, difficulty, signature, expire_at, expire_after}
+
+POST /api/v0/chat/completion              （SSE，见下）
+  headers: X-DS-PoW-Response: base64(...)
+
+GET  /api/v0/chat/history_messages?chat_session_id=<sid>
+  -> data.biz_data.chat_messages[]，元素里有 message_id / role / content / parent_id / status
+
+POST /api/v0/chat_session/delete          {"chat_session_ids":["<sid>"]}
+  -> data.biz_code（0 = 成功）
+```
+
+### completion 的请求体
+
+官方就发这几个字段（`main.js` 里那个三元表达式，`completion` 分支）：
+
+```json
+{
+  "chat_session_id": "<sid>",
+  "parent_message_id": null,
+  "model_type": null,
+  "prompt": "<要变成消息的文本>",
+  "ref_file_ids": [],
+  "thinking_enabled": false,
+  "search_enabled": false,
+  "source": null,
+  "action": null,
+  "preempt": false
+}
+```
+
+### 工作量证明（这一步是强制的）
+
+官方前端的逻辑是：先取 challenge、再解，**解不出来就直接 `return`，请求根本不发**。
+所以想往会话里塞消息，这关绕不过去。
+
+```js
+const u = await t.getPowRes();
+if (!u.success) {
+  n.onInterrupted();
+  SF.onGetPowFail({ ... });
+  return;                       // <- 不发请求
+}
+r.baseCompletion({ ..., challengeResponse: u.res, ... });
+```
+
+challenge 长这样：
+
+```json
+{
+  "algorithm": "DeepSeekHashV1",
+  "challenge": "<64 位十六进制，就是要凑的那个摘要>",
+  "salt": "<字符串>",
+  "difficulty": 12345,
+  "signature": "<字符串>",
+  "expire_at": 1789318365550,
+  "expire_after": 600
+}
+```
+
+解法：
+
+```
+prefix = salt + "_" + expire_at + "_"
+找 i ∈ [0, difficulty)，使 DeepSeekHashV1(prefix + String(i)) === challenge
+```
+
+然后把答案带上（`base64Encode` 在 web 平台就是 `btoa`）：
+
+```
+X-DS-PoW-Response: base64(JSON.stringify({
+  algorithm, challenge, salt, answer, signature, target_path: "/api/v0/chat/completion"
+}))
+```
+
+三个反直觉但必须照抄的地方：
+
+1. **prefix 用的是 `expire_at`，不是 `signature`。** 官方写成 `})(e,r,n,i,s)` 而参数签名是
+   `(t,e,r,n,i)`，第 5 个参数位传的是 `s`（`expireAt`）而不是 `f`（`signature`）。
+   看着像笔误，但服务端显然按同样口径算 —— 用 `signature` 拼 prefix 会永远解不出来。
+   而回传的 JSON 里 `signature` 字段还是真的那个 signature。两处用的不是同一个值。
+2. **`difficulty` 是搜索上界，不是"前导零个数"。** 循环是 `for (i = 0; i < difficulty; i++)`。
+3. **`DeepSeekHashV1` 是自定义哈希**，既不是 SHA3-256 也不是 Keccak-256，`node:crypto` 替不了。
+   见下一节。
+
+### DeepSeekHashV1
+
+算法本体在 PoW worker 里，有两个实现：WASM 版（chunk 37627 + `sha3_wasm_bg.7b9ca65ddd.wasm`）
+和纯 JS 版（chunk 76608）。两份在新版本客户端里都会用到，实测两者对同一道题给出的答案一致。
+
+它和标准 Keccak-f[1600] 的差别（下面这几条都是照着产物抄的，不是笔误）：
+
+- 置换只跑 **23 轮**（round 1..23），不是标准的 24 轮。
+- 内部把每个 lane 表示成两个 uint32 的 `[hi, lo]` 对，字节装载/取出时高低字是反的。
+- `chi` 是每 5 个**连续** lane 为一组，而不是标准里按行分组。
+- `iota` 把轮常数**永远异或进 lane 0**：`e[0] ^= d[2r], e[1] ^= d[2r+1]`，
+  而不是像标准那样异或进 lane `r`。
+- sponge 参数 `capacity=256` bit、`padding=0x06`，rate = `200 - 256/4` = 136 字节，输出 32 字节。
+
+本包在 `src/deepseek-hash.mjs` 里把它照抄了一遍，并且**拿产物自己的 worker 逐位对拍过**：
+13 组 golden vector 全中，另加 120 组随机串全中；拿本包的哈希出题，产物的 JS worker 和
+WASM worker 各解出 10/10（见 `VERIFY.md`）。
+
+### 两种塞法
+
+- `via=user`：只等**我们自己发的那条用户消息**落库，然后立刻把生成掐掉（abort）。
+  便宜，而且念出来的就是原文，一个字不差。前提是服务端肯念用户消息。
+- `via=reply`：让模型把话说完，拿回复那条。念的是模型复述出来的内容，可能有出入。
+
+哪种真能念，得拿真账号试。本包默认 `auto`：先试 `user`，被 `code=2` / `code=6` 挡了再换 `reply`。
+
+### 请求头里的坑
+
+官方前端在 completion 上还会带一批浏览器指纹头（`x-hif-leim`、`x-hif-dliq`、
+`x-client-bundle-id` 之类，由 `addSSEHeader` 和 `withDefaultHttpContext` 加）。
+这些是从浏览器环境里算出来的，本包**不伪造**。如果服务端哪天真要它们，
+用 `--header "名字: 值"` 自己塞。
+
+## 10. 没验证到的部分
 
 诚实列一下。下面这些要么是推断，要么没机会验证：
 
@@ -402,3 +532,18 @@ buildUrl(wsEndpoint, streamParams, { ticket, mode: "manual", format }, {
 8. **`color_palette` 字段** —— 早期备忘里提到过，但这一版客户端没有映射它，所以本包也没写成事实。
 9. **续传路径** —— 完全按代码写的，没有实际断线重连验证过。
 10. **opus 负载的分帧语义** —— 确认了是裸 Opus 包，但每个包多少采样、能否独立解码没验证。
+
+### 第 9 节（造会话/消息）额外没验证的
+
+11. **整条第 9 节的路，一次都没在真账号上跑过。** 建会话、取 challenge、解 PoW、发 completion、
+    拉 history、删会话 —— 请求体和请求头都按产物抄的，但服务端认不认没人验过。
+12. **`via=user` 到底能不能念。** 服务端肯不肯念一条用户消息，只能真机试。
+    挡回来大概是 `code=2` 或 `code=6`。本包默认 `auto`，就是为这个准备的。
+13. **`difficulty` 的真实量级。** 服务端给多大的上界完全未知（本地合成题只用到几千）。
+    本包默认上限 500 万次迭代，超了会明确报错而不是无限跑。
+14. **`role` 的枚举值。** 只知道客户端写的是 `role === MessageRole.ASSISTANT ? ASSISTANT : USER`，
+    具体数字/字符串没记。所以选消息时**不依赖 role**，改用「正文恰好等于我发的 prompt」这个判据。
+15. **是否还需要 `x-hif-*` 之类的指纹头。** 本包不发，见上一节的说明。
+16. **`chat/completion` 的 SSE 事件结构。** 本包不用：`via=user` 是拿到消息就 abort，
+    `via=reply` 是把流读干再看 history。所以事件名/字段一个都没用到，也就不需要它们对。
+17. **删会话会不会因为"会话里正在生成"而失败。** 本包先 abort/读完流再删，没在真机上确认过顺序够不够。

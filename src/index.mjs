@@ -70,10 +70,45 @@ export { synthesize, synthesizeToWavBuffer, redactUrl } from './tts.mjs';
 export { probeProtocol } from './probe.mjs';
 
 export {
+  DEEPSEEK_HASH_NAME,
+  DeepSeekSponge,
+  deepseekHashHex,
+  toHex,
+} from './deepseek-hash.mjs';
+
+export {
+  POW_HEADER,
+  POW_TARGET_COMPLETION,
+  POW_CHALLENGE_PATH,
+  powPrefix,
+  solvePowChallenge,
+  buildPowHeader,
+  defaultBase64,
+  fetchPowChallenge,
+  obtainPowHeader,
+} from './pow.mjs';
+
+export {
+  buildRepeatPrompt,
+  createSession,
+  deleteSession,
+  fetchMessages,
+  messageText,
+  messageIdOf,
+  isUserMessage,
+  pickMessage,
+  postCompletion,
+  drainSse,
+  putText,
+  say,
+} from './session.mjs';
+
+export {
   COMMANDS,
   OPTION_NAMES,
   parseArgv,
   numericOptions,
+  parseHeaderList,
   requireOption,
   requirePositional,
 } from './cli-args.mjs';

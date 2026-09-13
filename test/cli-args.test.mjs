@@ -5,10 +5,63 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { COMMANDS, numericOptions, parseArgv } from '../src/cli-args.mjs';
+import { COMMANDS, numericOptions, parseArgv, parseHeaderList } from '../src/cli-args.mjs';
 
-test('五个子命令都认得', () => {
-  assert.deepEqual([...COMMANDS], ['voices', 'demo', 'probe', 'read', 'wav', 'help']);
+test('七个子命令都认得', () => {
+  assert.deepEqual([...COMMANDS], ['voices', 'demo', 'probe', 'read', 'say', 'wav', 'help']);
+});
+
+test('say：位置参数拼成文本，选项各就各位', () => {
+  const p = parseArgv(['say', '你好', '世界', '--voice', 'tide', '-o', 'a.wav', '--keep']);
+  assert.deepEqual(p.errors, []);
+  assert.equal(p.command, 'say');
+  assert.deepEqual(p.positionals, ['你好', '世界']);
+  assert.equal(p.options.voice, 'tide');
+  assert.equal(p.options.out, 'a.wav');
+  assert.equal(p.options.keep, true);
+});
+
+test('say：--text 也能给文本', () => {
+  const p = parseArgv(['say', '--text', '念这句']);
+  assert.deepEqual(p.errors, []);
+  assert.equal(p.options.text, '念这句');
+  assert.deepEqual(p.positionals, []);
+});
+
+test('--via 只认 user / reply / auto', () => {
+  for (const v of ['user', 'reply', 'auto']) {
+    assert.deepEqual(parseArgv(['say', 'x', '--via', v]).errors, []);
+  }
+  const bad = parseArgv(['say', 'x', '--via', 'nope']);
+  assert.match(bad.errors[0], /--via 只支持 user \/ reply \/ auto/);
+  assert.equal(bad.options.via, undefined);
+});
+
+test('--header 可以重复给，收成数组', () => {
+  const p = parseArgv(['say', 'x', '--header', 'a: 1', '--header', 'b: 2']);
+  assert.deepEqual(p.errors, []);
+  assert.deepEqual(p.options.header, ['a: 1', 'b: 2']);
+});
+
+test('--header 只给一次时也收成数组（省得下游判断两种类型）', () => {
+  const p = parseArgv(['say', 'x', '--header', 'a: 1']);
+  assert.deepEqual(p.options.header, ['a: 1']);
+});
+
+test('parseHeaderList 把 "名: 值" 拆开', () => {
+  assert.deepEqual(parseHeaderList(['a: 1', 'X-Hif-Leim: zz']), { a: '1', 'X-Hif-Leim': 'zz' });
+  // 值里带冒号只切第一个
+  assert.deepEqual(parseHeaderList(['referer: https://x/y']), { referer: 'https://x/y' });
+  assert.deepEqual(parseHeaderList(undefined), {});
+  assert.throws(() => parseHeaderList(['没有冒号']), (e) => e.kind === 'usage');
+});
+
+test('--max-iterations / --wait 必须是正整数，并且会进 numericOptions', () => {
+  const p = parseArgv(['say', 'x', '--max-iterations', '1000', '--wait', '2000']);
+  assert.deepEqual(p.errors, []);
+  assert.deepEqual(numericOptions(p.options), { 'max-iterations': 1000, wait: 2000 });
+  assert.match(parseArgv(['say', 'x', '--max-iterations', '0']).errors[0], /--max-iterations/);
+  assert.match(parseArgv(['say', 'x', '--wait', 'abc']).errors[0], /--wait/);
 });
 
 test('read：长短选项混着来', () => {

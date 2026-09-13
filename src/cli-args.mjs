@@ -9,9 +9,9 @@
 import { FORMATS } from './constants.mjs';
 import { usageError } from './errors.mjs';
 
-export const COMMANDS = Object.freeze(['voices', 'demo', 'probe', 'read', 'wav', 'help']);
+export const COMMANDS = Object.freeze(['voices', 'demo', 'probe', 'read', 'say', 'wav', 'help']);
 
-/** 选项定义：名字 -> {alias, takesValue, validate} */
+/** 选项定义：名字 -> {alias, takesValue, multi, validate} */
 const OPTIONS = Object.freeze({
   out: { alias: 'o', takesValue: true },
   session: { takesValue: true },
@@ -20,6 +20,22 @@ const OPTIONS = Object.freeze({
   format: {
     takesValue: true,
     validate: (v) => (FORMATS.includes(v) ? null : `--format 只支持 ${FORMATS.join(' / ')}，收到 "${v}"`),
+  },
+  via: {
+    takesValue: true,
+    validate: (v) =>
+      ['user', 'reply', 'auto'].includes(v) ? null : `--via 只支持 user / reply / auto，收到 "${v}"`,
+  },
+  text: { takesValue: true },
+  keep: { takesValue: false },
+  header: { takesValue: true, multi: true },
+  'max-iterations': {
+    takesValue: true,
+    validate: (v) => (/^\d+$/.test(v) && Number(v) > 0 ? null : `--max-iterations 得是正整数，收到 "${v}"`),
+  },
+  wait: {
+    takesValue: true,
+    validate: (v) => (/^\d+$/.test(v) && Number(v) > 0 ? null : `--wait 得是正整数（毫秒），收到 "${v}"`),
   },
   lang: { takesValue: true },
   token: { takesValue: true },
@@ -127,7 +143,9 @@ export function parseArgv(argv = []) {
           continue;
         }
       }
-      options[name] = value;
+      options[name] = def.multi
+        ? [...(Array.isArray(options[name]) ? options[name] : options[name] === undefined ? [] : [options[name]]), value]
+        : value;
       continue;
     }
 
@@ -151,10 +169,29 @@ export function parseArgv(argv = []) {
 /** 把 "--rate 24000" 这种文本选项转成数字，集中在一处，省得每个命令各写一遍。 */
 export function numericOptions(options) {
   const out = {};
-  for (const key of ['rate', 'channels', 'timeout']) {
+  for (const key of ['rate', 'channels', 'timeout', 'max-iterations', 'wait']) {
     if (options[key] !== undefined) out[key] = Number(options[key]);
   }
   return out;
+}
+
+/**
+ * 把 ["a: b", "c: d"] 解析成 { a: 'b', c: 'd' }。
+ * 官方前端还会带一批指纹头（x-hif-leim / x-hif-dliq 之类），本包不伪造它们；
+ * 万一服务端非要，就用这个口子自己塞。
+ */
+export function parseHeaderList(list) {
+  const headers = {};
+  const items = Array.isArray(list) ? list : list === undefined ? [] : [list];
+  for (const raw of items) {
+    const idx = String(raw).indexOf(':');
+    if (idx <= 0) throw usageError(`--header 得写成 "名字: 值" 的形式，收到 "${raw}"`);
+    const name = String(raw).slice(0, idx).trim();
+    const value = String(raw).slice(idx + 1).trim();
+    if (!name) throw usageError(`--header 的名字是空的："${raw}"`);
+    headers[name] = value;
+  }
+  return headers;
 }
 
 export function requireOption(parsed, name, hint) {
