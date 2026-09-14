@@ -13,7 +13,6 @@ import {
   COMMANDS,
   DeepSeekTtsError,
   PCM,
-  VOICES,
   assertToken,
   fetchBinary,
   listVoices,
@@ -37,8 +36,8 @@ const VERSION_FALLBACK = '0.0.0';
 const USAGE = `dstts —— 非官方 DeepSeek 网页版朗读（TTS）客户端
 
 用法：
-  dstts voices                                   列音色（没登录态就打内置表）
-  dstts demo <voice_id> [-o out.mp3] [--lang zh] 下公开试听 demo（不需要登录）
+  dstts voices                                   列音色
+  dstts demo <voice_id> [-o out.mp3] [--lang zh] 下试听 demo
   dstts probe [--session <id> --message <id>]    取票 + 试连，打印判决
   dstts read --session <id> --message <id>       从已有会话消息合成
              [-o out.wav] [--voice mira] [--format pcm|opus]
@@ -48,8 +47,8 @@ const USAGE = `dstts —— 非官方 DeepSeek 网页版朗读（TTS）客户端
   dstts help
 
 登录态：
-  DS_TOKEN 环境变量，或者 --token <值>。本程序不会去读你的浏览器数据，
-  也不会把 token 写进任何文件。
+  所有命令都要登录态。DS_TOKEN 环境变量，或者 --token <值>。
+  本程序不会去读你的浏览器数据，也不会把 token 写进任何文件。
 
 通用选项：
   -o, --out <路径>     输出文件
@@ -106,77 +105,47 @@ function looksLikeMp3(buf) {
 }
 
 async function cmdVoices(parsed, ctx) {
-  const token = resolveToken(parsed.options.token);
-  let usedLive = false;
-  let live = null;
+  // 音色列表这个接口是要登录态的，不带就 40003。以前会静默退回内置表，
+  // 结果有人拿着过期的表来问为什么对不上——现在要求必须登录。
+  const token = assertToken(resolveToken(parsed.options.token));
 
-  if (token) {
-    try {
-      live = await listVoices({ token });
-      usedLive = true;
-    } catch (err) {
-      process.stderr.write(`[warn] 带 token 拉官方音色列表失败，退回内置表：${ctx.scrub(err.message)}\n`);
-    }
-  }
+  const live = await listVoices({ token });
 
   if (parsed.options.json) {
-    const payload = usedLive
-      ? {
+    process.stdout.write(
+      JSON.stringify(
+        {
           source: 'api',
           defaultVoiceId: live.defaultVoiceId,
           currentVoiceId: live.currentVoiceId,
           voices: live.voices,
-        }
-      : { source: 'builtin', voices: VOICES };
-    process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
+        },
+        null,
+        2,
+      ) + '\n',
+    );
     return 0;
   }
 
-  if (usedLive) {
-    process.stdout.write(`音色列表（官方接口 /api/v0/chat/tts/voices）\n`);
-    process.stdout.write(`默认 ${live.defaultVoiceId ?? '?'}   当前 ${live.currentVoiceId ?? '?'}\n\n`);
-    for (const v of live.voices) {
-      const name = v.nameI18n?.zh ?? v.nameI18n?.en ?? '';
-      const desc = v.descriptionI18n?.zh ?? v.descriptionI18n?.en ?? '';
-      const langs = Array.isArray(v.languages) ? v.languages.length : 0;
-      const demos = Object.keys(v.demoUrls ?? {}).length;
-      process.stdout.write(
-        `  ${String(v.id).padEnd(8)} ${name.padEnd(4)} ${String(v.gender ?? '').padEnd(7)} ` +
-          `${desc.padEnd(6)} ${String(langs).padStart(2)} 种语言  试听 ${demos} 个` +
-          `${v.isDefault ? '  (默认)' : ''}\n`,
-      );
-    }
-    process.stdout.write('\n');
-    for (const v of live.voices) {
-      for (const [lang, url] of Object.entries(v.demoUrls ?? {})) {
-        process.stdout.write(`  ${v.id}/${lang}  ${url}\n`);
-      }
-    }
-    return 0;
-  }
-
-  process.stdout.write('音色列表（本地内置表；不是实时拉的）\n');
-  process.stdout.write('  内置表来自逆向 + 2026-09-12 在真实账号上的实测。\n');
-  process.stdout.write(
-    '  想拉实时的（也顺便拿到全部试听地址）就设 DS_TOKEN 或传 --token。\n\n',
-  );
-  for (const v of VOICES) {
+  process.stdout.write(`音色列表（官方接口 /api/v0/chat/tts/voices）\n`);
+  process.stdout.write(`默认 ${live.defaultVoiceId ?? '?'}   当前 ${live.currentVoiceId ?? '?'}\n\n`);
+  for (const v of live.voices) {
+    const name = v.nameI18n?.zh ?? v.nameI18n?.en ?? '';
+    const desc = v.descriptionI18n?.zh ?? v.descriptionI18n?.en ?? '';
+    const langs = Array.isArray(v.languages) ? v.languages.length : 0;
+    const demos = Object.keys(v.demoUrls ?? {}).length;
     process.stdout.write(
-      `  ${v.id.padEnd(8)} ${v.name.padEnd(4)} ${(v.gender === 'female' ? '女' : '男').padEnd(2)} ` +
-        `${v.description.padEnd(6)} ${String(v.languageCount).padStart(2)} 种语言` +
+      `  ${String(v.id).padEnd(8)} ${name.padEnd(4)} ${String(v.gender ?? '').padEnd(7)} ` +
+        `${desc.padEnd(6)} ${String(langs).padStart(2)} 种语言  试听 ${demos} 个` +
         `${v.isDefault ? '  (默认)' : ''}\n`,
     );
   }
-  process.stdout.write('\n内置表里实测能下载的试听：\n');
-  for (const v of VOICES) {
-    for (const [lang, url] of Object.entries(v.demoUrls)) {
+  process.stdout.write('\n');
+  for (const v of live.voices) {
+    for (const [lang, url] of Object.entries(v.demoUrls ?? {})) {
       process.stdout.write(`  ${v.id}/${lang}  ${url}\n`);
     }
   }
-  process.stdout.write(
-    '\n注意：CDN 文件名形如 <voice>_<lang>.<hash>.mp3，哈希是每个「音色+语言」各一份、互不相同，\n' +
-      '所以 echo / stella 的地址没法拼——必须带登录态问官方音色接口要。\n',
-  );
   return 0;
 }
 
@@ -185,7 +154,7 @@ async function cmdDemo(parsed, ctx) {
   const lang = parsed.options.lang ?? 'zh';
   const out = parsed.options.out ?? `demo-${voiceId}-${lang}.mp3`;
 
-  const token = resolveToken(parsed.options.token);
+  const token = assertToken(resolveToken(parsed.options.token));
   const { url, source } = await resolveDemoUrl({ voiceId, lang, token });
 
   process.stdout.write(`试听 ${voiceId}/${lang}（来源：${source === 'api' ? '官方接口' : '内置表'}）\n`);
