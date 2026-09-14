@@ -42,7 +42,7 @@ const USAGE = `dstts —— 非官方 DeepSeek 网页版朗读（TTS）客户端
   dstts read --session <id> --message <id>       从已有会话消息合成
              [-o out.wav] [--voice mira] [--format pcm|opus]
   dstts say <文本> [-o out.wav]                  随便给一段文本，现场造一个一次性会话念出来
-             [--voice mira] [--via user|reply|auto] [--keep]
+             [--voice mira] [--keep]
   dstts wav <in.pcm> <out.wav> [--rate 24000] [--channels 1]
   dstts help
 
@@ -61,8 +61,6 @@ const USAGE = `dstts —— 非官方 DeepSeek 网页版朗读（TTS）客户端
       --version        版本号
 
 say 专属：
-      --via <模式>     user（默认，念的就是原文，最省）/ reply（让模型复述）/
-                       auto（先 user，不成再 reply）
       --keep           念完不删那个临时会话（默认删）
       --wait <ms>      等消息落库的上限，默认 60000
       --max-iterations <n>  PoW 搜索上限，默认 5000000
@@ -70,6 +68,7 @@ say 专属：
 
 没有正文参数这件事是真的：/chat/tts 的请求里只有 chat_session_id + message_id，
 读什么文字由服务端从你的会话消息里取 —— 所以 say 干的就是先把文本变成一条消息。
+服务端不念用户消息（code=6），所以要绕一道：让模型先复述一遍，念它那条。
 `;
 
 async function readPkgVersion() {
@@ -261,7 +260,6 @@ async function cmdSay(parsed, ctx) {
   if (!text || !text.trim()) {
     throw usageError('say 需要文本：`dstts say "要念的内容"` 或者 --text "..."');
   }
-  const via = parsed.options.via ?? 'auto';
   const { format = 'pcm' } = parsed.options;
   const { timeout, wait, 'max-iterations': maxIterations } = numericOptions(parsed.options);
   const extraHeaders = parseHeaderList(parsed.options.header);
@@ -270,13 +268,12 @@ async function cmdSay(parsed, ctx) {
   const ext = format === 'pcm' ? 'wav' : 'opus';
   const out = parsed.options.out ?? `ds-say-${Date.now()}.${ext}`;
 
-  process.stdout.write(`文本 ${text.length} 字，方式 via=${via}，format=${format}\n`);
-  process.stdout.write('  1) 建一次性会话 → 2) 解 PoW → 3) 把文本发进去 → 4) 取 message_id → 5) 合成\n');
+  process.stdout.write(`文本 ${text.length} 字，format=${format}\n`);
+  process.stdout.write('  1) 建一次性会话 → 2) 解 PoW → 3) 让模型复述一遍 → 4) 取 message_id → 5) 合成\n');
 
   const t0 = Date.now();
   const result = await say({
     text,
-    via,
     format,
     token,
     voice: parsed.options.voice,
@@ -295,7 +292,7 @@ async function cmdSay(parsed, ctx) {
       if (p.step === 'completion') process.stdout.write('  正在把文本发进会话…\n');
       if (p.step === 'message') {
         process.stdout.write(
-          `  message_id=${p.messageId}${p.stopped ? '（已把后续生成掐掉）' : ''}` +
+          `  message_id=${p.messageId}` +
             `${p.streamBytes !== undefined ? `，SSE 读了 ${fmtBytes(p.streamBytes)}` : ''}\n`,
         );
       }

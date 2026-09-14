@@ -91,7 +91,6 @@ dstts probe --session <会话id> --message <消息id>
 ```bash
 dstts say "今天天气不错，适合睡觉。"
 dstts say "念这句" --voice tide -o tide.wav
-dstts say "长文本……" --via reply
 dstts say "别删会话" --keep
 ```
 
@@ -99,17 +98,15 @@ dstts say "别删会话" --keep
 去你会话里查。所以 `say` 会现场造一个一次性会话，把文本塞进去，拿到 id 去念，念完删掉。
 
 ```
-建会话 → 取 PoW challenge → 解工作量证明 → 把文本作为一条消息发进去
+建会话 → 取 PoW challenge → 解工作量证明 → 让模型复述一遍
       → 拉 history 拿到 message_id → 合成 → 删会话
 ```
 
+为什么要多一道「复述」：服务端**不肯念用户消息**（`code=6 NO_CONTENT`），只能念模型的消息。
+所以发进去的是一句「请把下面这句话原样复述一遍」，念的是它复述出来的那条。
+这一步是自动的，你不用管。
+
 整条链路大概 3 秒出头（短句），长文本按音频时长线性涨，一秒音频约 0.2 秒。
-
-`--via` 三种：
-
-- `reply`：让模型复述一遍，念它那条。**推荐用这个**，比 `auto` 快一倍。
-- `user`：只等我们发的那条用户消息落库，念的就是原文。服务端会拒（`code=6`）。
-- `auto`（默认）：先试 `user`，被拒了换 `reply` 重来。
 
 `--voice` 切音色，`-o` 指定输出，`--format opus|pcm`。默认念完删掉临时会话，`--keep` 留着。
 要加自定义请求头用 `--header "名字: 值"`。
@@ -213,7 +210,7 @@ catch (e) {
 
 **票是一次性的。** 600 秒有效，但只能用一次。同一张票第二次建 ws 会被 1006 断开，零帧、没有任何错误信息。每次建连前都重新取票。
 
-**`user` 那条路服务端不收。** 念用户消息是 `code=6 NO_CONTENT`。用 `--via reply`。
+**服务端只念模型的消息。** 用户消息一律 `code=6 NO_CONTENT`，所以 `say` 中间必须让模型复述一遍。
 
 **账号可能压根没被放行。** `code=9 NOT_AVAILABLE` / `11 FORBIDDEN`，灰测和地区都有可能。跑 `probe` 看。
 

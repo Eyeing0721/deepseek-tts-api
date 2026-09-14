@@ -28,13 +28,10 @@ test('say：--text 也能给文本', () => {
   assert.deepEqual(p.positionals, []);
 });
 
-test('--via 只认 user / reply / auto', () => {
-  for (const v of ['user', 'reply', 'auto']) {
-    assert.deepEqual(parseArgv(['say', 'x', '--via', v]).errors, []);
-  }
-  const bad = parseArgv(['say', 'x', '--via', 'nope']);
-  assert.match(bad.errors[0], /--via 只支持 user \/ reply \/ auto/);
-  assert.equal(bad.options.via, undefined);
+test('--via 已经去掉了（只有一种念法，不需要开关）', () => {
+  const p = parseArgv(['say', 'x', '--via', 'reply']);
+  assert.ok(p.errors.length > 0, '--via 应该被当成不认识的选项');
+  assert.equal(p.options.via, undefined);
 });
 
 test('--header 可以重复给，收成数组', () => {

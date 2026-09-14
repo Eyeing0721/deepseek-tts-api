@@ -192,38 +192,14 @@ export function messageText(m) {
 }
 
 /**
- * 认「是不是用户消息」。
+ * 从消息列表里挑出要念的那条 —— 模型的回复，不是我们发进去的那条。
  *
- * role 的枚举值我们没拿到（main.js 里是 `MessageRole.ASSISTANT ? ASSISTANT : USER` 这种写法，
- * 具体数字没记），所以这里不依赖它：字符串 role 就直接看，数字/缺失就退回「正文等于我发的内容」。
- * 新会话里只有两条消息，这个判据足够稳。
+ * 判据是「正文非空、且不等于我发的内容」，不依赖 role 枚举（那个值我们没拿到）。
+ * 新会话里只有两条消息，够用。取最后一条，因为回复是后落库的那个。
  */
-export function isUserMessage(m, prompt) {
-  const role = m?.role;
-  if (typeof role === 'string') {
-    const r = role.toLowerCase();
-    if (r.includes('assistant')) return false;
-    if (r.includes('user')) return true;
-  }
-  if (typeof role === 'number') {
-    // 只知道 AI 是 ASSISTANT；如果两条消息 role 不同，用户那条就是小的那个……不确定，
-    // 所以数字 role 一律走正文比对，别猜。
-  }
-  return prompt !== undefined && messageText(m).trim() === String(prompt).trim();
-}
-
-/** 从消息列表里挑出我们要的那条。 */
-export function pickMessage(messages, { prompt, want }) {
+export function pickMessage(messages, { prompt }) {
   const list = messages.filter((m) => m && (m.message_id || m.id));
   const wanted = String(prompt ?? '').trim();
-  if (want === 'user') {
-    // 优先「正文恰好等于我发的内容」，这条最稳，不依赖 role 枚举。
-    const exact = list.find((m) => messageText(m).trim() === wanted);
-    if (exact) return exact;
-    // 退一步：role 是字符串的话按 role 认
-    return list.find((m) => isUserMessage(m, prompt)) ?? null;
-  }
-  // want === 'reply'：正文非空、且不是我们发的那条
   const replies = list.filter((m) => {
     const txt = messageText(m).trim();
     return txt.length > 0 && txt !== wanted;
@@ -314,10 +290,12 @@ export async function drainSse(res, { onChunk, maxBytes = 8 * 1024 * 1024 } = {}
 /**
  * 把一段文本塞进一个新会话，返回它的 sessionId / messageId。
  * 调用方负责之后删会话（say() 会删）。
+ *
+ * 发进去的是「复述提示语」而不是原文：服务端不肯念用户消息（code=6 NO_CONTENT），
+ * 得让模型先把话复述一遍，念它那条。
  */
 export async function putText({
   text,
-  via = 'user',
   token,
   signal,
   fetchImpl = globalThis.fetch,
@@ -331,11 +309,8 @@ export async function putText({
 } = {}) {
   const t = assertToken(token);
   if (typeof text !== 'string' || !text.trim()) throw usageError('putText 需要非空 text');
-  if (!['user', 'reply'].includes(via)) {
-    throw usageError(`via 只支持 'user' / 'reply'，收到 "${via}"`);
-  }
 
-  const prompt = via === 'reply' ? buildRepeatPrompt(text) : text;
+  const prompt = buildRepeatPrompt(text);
   const session = await createSession({ token: t, signal, fetchImpl, baseUrl });
   const sessionId = session.id;
   onProgress({ step: 'session', sessionId });
@@ -384,7 +359,7 @@ export async function putText({
       );
     }
 
-    // 后台把流读着，别让连接闲着；via=user 时等我们自己那条消息落库就把流掐了。
+    // 后台把流读着，别让连接闲着。等模型把话说完（或超时）。
     const drainPromise = drainSse(res, {});
 
     const deadline = Date.now() + waitTimeoutMs;
@@ -398,15 +373,14 @@ export async function putText({
         len: messageText(m).length,
         parent: m?.parent_id ?? null,
       }));
-      picked = pickMessage(messages, { prompt, want: via });
+      picked = pickMessage(messages, { prompt });
       if (picked) {
-        if (via === 'user') break;
-        // reply：还要等它别长了
+        // 还要等它别长了，否则可能念到半截
         const textNow = messageText(picked).trim();
         if (textNow) {
           await new Promise((r) => setTimeout(r, pollIntervalMs));
           const again = await fetchMessages({ sessionId, token: t, signal, fetchImpl, baseUrl });
-          const picked2 = pickMessage(again.messages, { prompt, want: 'reply' });
+          const picked2 = pickMessage(again.messages, { prompt });
           if (picked2 && messageText(picked2).trim() === textNow) {
             picked = picked2;
             break;
@@ -422,7 +396,7 @@ export async function putText({
       cleanupAbort();
       await drainPromise;
       throw transportError(
-        `等了 ${waitTimeoutMs}ms 也没在会话 ${sessionId} 里等到${via === 'user' ? '我们发的那条用户消息' : '模型的回复'}。` +
+        `等了 ${waitTimeoutMs}ms 也没在会话 ${sessionId} 里等到模型的回复。` +
           `会话里现在有 ${lastSeen.length} 条：${JSON.stringify(lastSeen)}`,
         { sessionId, messages: lastSeen },
       );
@@ -435,20 +409,12 @@ export async function putText({
       });
     }
 
-    if (via === 'user') {
-      // 已经拿到要念的东西，把后面的生成掐了，省钱省时间
-      cleanupAbort();
-      await drainPromise;
-      onProgress({ step: 'message', messageId, stopped: true });
-    } else {
-      const drained = await drainPromise;
-      onProgress({ step: 'message', messageId, streamBytes: drained.bytes, streamError: drained.error });
-    }
+    const drained = await drainPromise;
+    onProgress({ step: 'message', messageId, streamBytes: drained.bytes, streamError: drained.error });
 
     return {
       sessionId,
       messageId,
-      via,
       prompt,
       text,
       content: messageText(picked),
@@ -473,11 +439,11 @@ export async function putText({
 /**
  * 一条龙：造会话 -> 塞文本 -> 合成 -> 删会话。
  *
- * via='auto' 时先试 'user'（念的就是原文、还便宜），失败再换 'reply' 重来一遍。
+ * 没有别的路子可选：服务端只念模型的消息，念用户消息一律 code=6 NO_CONTENT。
+ * 所以就是把文本让模型复述一遍再念。失败会把临时会话删掉，不留垃圾。
  */
 export async function say({
   text,
-  via = 'auto',
   format = 'pcm',
   voice,
   token,
@@ -506,86 +472,43 @@ export async function say({
     ...(ackMode ? { ackMode } : {}),
   };
 
-  const attempts = via === 'auto' ? ['user', 'reply'] : [via];
-  const problems = [];
-  let lastSession = null;
-
+  let sessionId = null;
   try {
-    for (let i = 0; i < attempts.length; i++) {
-      const mode = attempts[i];
-      let placed = null;
-      try {
-        placed = await putText({
-          text,
-          via: mode,
-          token: t,
-          signal,
-          fetchImpl,
-          ...(baseUrl ? { baseUrl } : {}),
-          ...(waitTimeoutMs ? { waitTimeoutMs } : {}),
-          ...(maxIterations ? { maxIterations } : {}),
-          onProgress,
-        });
-      } catch (err) {
-        problems.push({ via: mode, stage: 'putText', error: err?.message ?? String(err) });
-        if (i === attempts.length - 1) break;
-        log(`via=${mode} 塞消息失败：${err?.message ?? err}；换 ${attempts[i + 1]} 再来`);
-        continue;
-      }
+    const placed = await putText({
+      text,
+      token: t,
+      signal,
+      fetchImpl,
+      ...(baseUrl ? { baseUrl } : {}),
+      ...(waitTimeoutMs ? { waitTimeoutMs } : {}),
+      ...(maxIterations ? { maxIterations } : {}),
+      onProgress,
+    });
+    sessionId = placed.sessionId;
 
-      lastSession = placed.sessionId;
-      try {
-        const result = await synthesize({
-          sessionId: placed.sessionId,
-          messageId: placed.messageId,
-          ...ttsOptions,
-        });
-        return {
-          ...result,
-          scratch: {
-            via: mode,
-            sessionId: placed.sessionId,
-            messageId: placed.messageId,
-            prompt: placed.prompt,
-            content: placed.content,
-            pow: placed.pow,
-            attempts: i + 1,
-            problems,
-            kept: keepSession,
-          },
-        };
-      } catch (err) {
-        problems.push({ via: mode, stage: 'tts', error: err?.message ?? String(err), code: err?.code });
-        const retriable = err?.code === ErrorCode.NO_CONTENT || err?.code === ErrorCode.INVALID_INPUT;
-        if (i === attempts.length - 1 || (via !== 'auto' && !retriable)) {
-          // 换会话重试没意义了，把错抛出去
-          err.problems = problems;
-          err.scratch = { sessionId: placed.sessionId, messageId: placed.messageId, via: mode };
-          throw err;
-        }
-        log(
-          `via=${mode} 合成被拒（code=${err?.code}）——` +
-            `${mode === 'user' ? '看来说的用户消息不能直接念' : ''}换 ${attempts[i + 1]} 再来`,
-        );
-        // 这个会话不要了，删掉再换下一种
-        if (!keepSession) {
-          await deleteSession({ sessionIds: placed.sessionId, token: t, fetchImpl, ...(baseUrl ? { baseUrl } : {}) });
-          if (lastSession === placed.sessionId) lastSession = null;
-        }
-      }
-    }
+    const result = await synthesize({
+      sessionId: placed.sessionId,
+      messageId: placed.messageId,
+      ...ttsOptions,
+    });
 
-    const summary = problems.map((p) => `${p.via}/${p.stage}: ${p.error}`).join(' | ');
-    throw new DeepSeekTtsError(
-      `两种路子都没成（${attempts.join(' -> ')}）：${summary}`,
-      { kind: 'protocol', details: { problems } },
-    );
+    return {
+      ...result,
+      scratch: {
+        sessionId: placed.sessionId,
+        messageId: placed.messageId,
+        prompt: placed.prompt,
+        content: placed.content,
+        pow: placed.pow,
+        kept: keepSession,
+      },
+    };
   } finally {
-    if (lastSession && !keepSession) {
-      const del = await deleteSession({ sessionIds: lastSession, token: t, fetchImpl, ...(baseUrl ? { baseUrl } : {}) });
-      log(del.ok ? `已删掉临时会话 ${lastSession}` : `临时会话 ${lastSession} 没删掉（${del.error ?? del.bizCode}），自己留意一下`);
-    } else if (lastSession && keepSession) {
-      log(`保留了临时会话 ${lastSession}`);
+    if (sessionId && !keepSession) {
+      const del = await deleteSession({ sessionIds: sessionId, token: t, fetchImpl, ...(baseUrl ? { baseUrl } : {}) });
+      log(del.ok ? `已删掉临时会话 ${sessionId}` : `临时会话 ${sessionId} 没删掉（${del.error ?? del.bizCode}），自己留意一下`);
+    } else if (sessionId && keepSession) {
+      log(`保留了临时会话 ${sessionId}`);
     }
   }
 }

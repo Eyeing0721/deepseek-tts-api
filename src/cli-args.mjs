@@ -21,11 +21,6 @@ const OPTIONS = Object.freeze({
     takesValue: true,
     validate: (v) => (FORMATS.includes(v) ? null : `--format 只支持 ${FORMATS.join(' / ')}，收到 "${v}"`),
   },
-  via: {
-    takesValue: true,
-    validate: (v) =>
-      ['user', 'reply', 'auto'].includes(v) ? null : `--via 只支持 user / reply / auto，收到 "${v}"`,
-  },
   text: { takesValue: true },
   keep: { takesValue: false },
   header: { takesValue: true, multi: true },

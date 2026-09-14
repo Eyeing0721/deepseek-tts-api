@@ -95,7 +95,6 @@ export {
   fetchMessages,
   messageText,
   messageIdOf,
-  isUserMessage,
   pickMessage,
   postCompletion,
   drainSse,

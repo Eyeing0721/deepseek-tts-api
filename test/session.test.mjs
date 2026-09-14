@@ -14,7 +14,6 @@ import assert from 'node:assert/strict';
 
 import {
   buildRepeatPrompt,
-  isUserMessage,
   messageIdOf,
   messageText,
   pickMessage,
@@ -189,47 +188,44 @@ test('messageText 兼容 string / 对象 / 空', () => {
   assert.equal(messageText({ content: { a: 1 } }), '{"a":1}');
 });
 
-test('isUserMessage：role 是字符串时按 role，认不出来时退回正文比对', () => {
-  assert.equal(isUserMessage({ role: 'user', content: 'x' }, 'x'), true);
-  assert.equal(isUserMessage({ role: 'assistant', content: 'x' }, 'x'), false);
-  assert.equal(isUserMessage({ role: 'USER', content: 'x' }, 'x'), true);
-  assert.equal(isUserMessage({ role: 'ASSISTANT', content: 'x' }, 'x'), false);
-  // role 是数字（真实枚举值没拿到）时不能瞎猜，走正文比对
-  assert.equal(isUserMessage({ role: 1, content: 'x' }, 'x'), true);
-  assert.equal(isUserMessage({ role: 1, content: 'y' }, 'x'), false);
-});
-
-test('pickMessage 按 want 挑人，且不依赖 role 枚举', () => {
+test('pickMessage 挑的是模型的回复，不是我们发进去的那条', () => {
   const msgs = [
     { message_id: 'm1', role: 1, content: '你好' },
     { message_id: 'm2', role: 2, content: '你好呀，有什么可以帮你的' },
   ];
-  assert.equal(messageIdOf(pickMessage(msgs, { prompt: '你好', want: 'user' })), 'm1');
-  assert.equal(messageIdOf(pickMessage(msgs, { prompt: '你好', want: 'reply' })), 'm2');
+  assert.equal(messageIdOf(pickMessage(msgs, { prompt: '你好' })), 'm2');
 });
 
 test('pickMessage 在回复还没长出来时不硬挑', () => {
   const msgs = [{ message_id: 'm1', role: 1, content: '你好' }];
-  assert.equal(pickMessage(msgs, { prompt: '你好', want: 'reply' }), null);
-  assert.equal(messageIdOf(pickMessage(msgs, { prompt: '你好', want: 'user' })), 'm1');
+  assert.equal(pickMessage(msgs, { prompt: '你好' }), null);
 });
 
 test('pickMessage 忽略没有 id 的条目', () => {
-  const msgs = [{ content: '你好' }, { message_id: 'm1', content: '你好' }];
-  assert.equal(messageIdOf(pickMessage(msgs, { prompt: '你好', want: 'user' })), 'm1');
+  const msgs = [{ content: '你好' }, { message_id: 'm1', content: '你好' }, { message_id: 'm2', content: '回复' }];
+  assert.equal(messageIdOf(pickMessage(msgs, { prompt: '你好' })), 'm2');
+});
+
+test('pickMessage 取最后一条，因为回复是后落库的那个', () => {
+  const msgs = [
+    { message_id: 'm1', content: 'prompt' },
+    { message_id: 'm2', content: '先出来一半' },
+    { message_id: 'm3', content: '完整回复' },
+  ];
+  assert.equal(messageIdOf(pickMessage(msgs, { prompt: 'prompt' })), 'm3');
 });
 
 // ---------------- putText ----------------
 
-test('putText(via=user)：建会话 → 解 PoW → 发文本 → 拿 user message_id', async () => {
+test('putText：建会话 → 解 PoW → 发复述提示语 → 拿模型那条 message_id', async () => {
   const server = makeServer({
     messagesFor: () => [
-      { message_id: 'u-1', role: 1, content: '要念的这句话', parent_id: null },
+      { message_id: 'u-1', role: 1, content: buildRepeatPrompt('要念的这句话'), parent_id: null },
+      { message_id: 'a-1', role: 2, content: '要念的这句话', parent_id: 'u-1' },
     ],
   });
   const out = await putText({
     text: '要念的这句话',
-    via: 'user',
     token: TOKEN,
     fetchImpl: server.fetchImpl,
     pollIntervalMs: 1,
@@ -237,9 +233,9 @@ test('putText(via=user)：建会话 → 解 PoW → 发文本 → 拿 user messa
   });
 
   assert.equal(out.sessionId, 'sess-1');
-  assert.equal(out.messageId, 'u-1');
-  assert.equal(out.via, 'user');
-  assert.equal(out.prompt, '要念的这句话');
+  assert.equal(out.messageId, 'a-1');
+  assert.ok(out.prompt.includes('要念的这句话'), '发的是复述提示语');
+  assert.ok(out.prompt.length > '要念的这句话'.length, '提示语比原文长');
   assert.equal(out.pow.answer, POW_ANSWER);
   assert.equal(out.content, '要念的这句话');
 
@@ -254,7 +250,7 @@ test('putText(via=user)：建会话 → 解 PoW → 发文本 → 拿 user messa
   const comp = callsTo(server.calls, '/chat/completion')[0];
   const body = JSON.parse(comp.body);
   assert.equal(body.chat_session_id, 'sess-1');
-  assert.equal(body.prompt, '要念的这句话');
+  assert.equal(body.prompt, buildRepeatPrompt('要念的这句话'));
   assert.equal(body.parent_message_id, null);
   assert.deepEqual(body.ref_file_ids, []);
   assert.equal(body.thinking_enabled, false);
@@ -277,34 +273,14 @@ test('putText(via=user)：建会话 → 解 PoW → 发文本 → 拿 user messa
   assert.equal(comp.headers.accept, 'text/event-stream');
 });
 
-test('putText(via=reply)：发的是复述提示语，挑回来的是模型那条', async () => {
+test('putText：等不到回复就报错，并把会话里实际有什么打出来', async () => {
+  // 只有我们发进去的那条，模型还没回
   const server = makeServer({
-    messagesFor: () => [
-      { message_id: 'u-1', role: 1, content: buildRepeatPrompt('原文') },
-      { message_id: 'a-1', role: 2, content: '原文' },
-    ],
+    messagesFor: () => [{ message_id: 'u-1', role: 1, content: buildRepeatPrompt('要念的这句话') }],
   });
-  const out = await putText({
-    text: '原文',
-    via: 'reply',
-    token: TOKEN,
-    fetchImpl: server.fetchImpl,
-    pollIntervalMs: 1,
-    waitTimeoutMs: 3000,
-  });
-  assert.equal(out.messageId, 'a-1');
-  assert.equal(out.via, 'reply');
-  const body = JSON.parse(callsTo(server.calls, '/chat/completion')[0].body);
-  assert.ok(body.prompt.includes('原文'));
-  assert.ok(body.prompt.length > '原文'.length, 'reply 模式发的是提示语，不是原文');
-});
-
-test('putText：等不到消息就报错，并把会话里实际有什么打出来', async () => {
-  const server = makeServer({ messagesFor: () => [{ message_id: 'x', role: 2, content: '别的' }] });
   await assert.rejects(
     putText({
       text: '要念的这句话',
-      via: 'user',
       token: TOKEN,
       fetchImpl: server.fetchImpl,
       pollIntervalMs: 1,
@@ -312,7 +288,7 @@ test('putText：等不到消息就报错，并把会话里实际有什么打出�
     }),
     (err) => {
       assert.equal(err.kind, 'transport');
-      assert.match(err.message, /等到/);
+      assert.match(err.message, /等到模型的回复/);
       assert.ok(Array.isArray(err.details.messages));
       return true;
     },
@@ -322,45 +298,46 @@ test('putText：等不到消息就报错，并把会话里实际有什么打出�
 test('putText：completion 返回非 2xx 要报错', async () => {
   const server = makeServer({ completionStatus: 403 });
   await assert.rejects(
-    putText({ text: 'x', via: 'user', token: TOKEN, fetchImpl: server.fetchImpl, pollIntervalMs: 1, waitTimeoutMs: 200 }),
+    putText({ text: 'x', token: TOKEN, fetchImpl: server.fetchImpl, pollIntervalMs: 1, waitTimeoutMs: 200 }),
     /HTTP 403/,
   );
 });
 
 test('putText：参数不对走 usage 错', async () => {
   const server = makeServer();
-  await assert.rejects(putText({ text: '', via: 'user', token: TOKEN, fetchImpl: server.fetchImpl }), (e) => e.kind === 'usage');
-  await assert.rejects(putText({ text: 'x', via: 'nope', token: TOKEN, fetchImpl: server.fetchImpl }), (e) => e.kind === 'usage');
+  await assert.rejects(putText({ text: '', token: TOKEN, fetchImpl: server.fetchImpl }), (e) => e.kind === 'usage');
+  await assert.rejects(putText({ text: '   ', token: TOKEN, fetchImpl: server.fetchImpl }), (e) => e.kind === 'usage');
 });
 
 // ---------------- say 全链路 ----------------
 
-test('say(via=user)：整条链路 + 念完把临时会话删掉', async () => {
+test('say：整条链路 + 念完把临时会话删掉', async () => {
   const server = makeServer({
-    messagesFor: () => [{ message_id: 'u-1', role: 1, content: '念我' }],
+    messagesFor: () => [
+      { message_id: 'u-1', role: 1, content: buildRepeatPrompt('念我') },
+      { message_id: 'a-1', role: 2, content: '念我' },
+    ],
   });
   const { FakeWS, instances } = makeWs(okTtsScript);
 
   const result = await say({
     text: '念我',
-    via: 'user',
     token: TOKEN,
     fetchImpl: server.fetchImpl,
     webSocketImpl: FakeWS,
     waitTimeoutMs: 3000,
   });
 
-  assert.equal(result.scratch.via, 'user');
   assert.equal(result.scratch.sessionId, 'sess-1');
-  assert.equal(result.scratch.messageId, 'u-1');
+  assert.equal(result.scratch.messageId, 'a-1');
   assert.equal(result.scratch.kept, false);
   assert.equal(result.frameCount, 2);
   assert.deepEqual([...result.audio], [0x11, 0x11, 0x22, 0x22]);
   assert.equal(result.format, 'pcm');
 
-  // ws 连的是那个临时会话
+  // ws 连的是那个临时会话，念的是模型那条
   assert.ok(instances[0].url.includes('chat_session_id=sess-1'));
-  assert.ok(instances[0].url.includes('message_id=u-1'));
+  assert.ok(instances[0].url.includes('message_id=a-1'));
 
   // 最后把会话删了，而且只删一次
   const dels = callsTo(server.calls, '/chat_session/delete');
@@ -369,11 +346,15 @@ test('say(via=user)：整条链路 + 念完把临时会话删掉', async () => {
 });
 
 test('say(--keep)：不删会话', async () => {
-  const server = makeServer({ messagesFor: () => [{ message_id: 'u-1', role: 1, content: '念我' }] });
+  const server = makeServer({
+    messagesFor: () => [
+      { message_id: 'u-1', role: 1, content: buildRepeatPrompt('念我') },
+      { message_id: 'a-1', role: 2, content: '念我' },
+    ],
+  });
   const { FakeWS } = makeWs(okTtsScript);
   const result = await say({
     text: '念我',
-    via: 'user',
     token: TOKEN,
     keepSession: true,
     fetchImpl: server.fetchImpl,
@@ -384,72 +365,38 @@ test('say(--keep)：不删会话', async () => {
   assert.equal(callsTo(server.calls, '/chat_session/delete').length, 0);
 });
 
-test('say(via=auto)：user 念不了（code=6）就自动换 reply 重来', async () => {
-  // 第一次 history 给用户消息，第二次给用户+回复
-  let call = 0;
+test('say：合成被拒就直接抛，不重试', async () => {
   const server = makeServer({
-    messagesFor: () => {
-      call++;
-      const userMsg = { message_id: `u-${call}`, role: 1, content: call === 1 ? '念我' : buildRepeatPrompt('念我') };
-      if (call === 1) return [userMsg];
-      return [userMsg, { message_id: `a-${call}`, role: 2, content: '念我' }];
-    },
+    messagesFor: () => [
+      { message_id: 'u-1', role: 1, content: buildRepeatPrompt('念我') },
+      { message_id: 'a-1', role: 2, content: '念我' },
+    ],
   });
-
-  // 第一次 ws 给 finish code=6（NO_CONTENT），第二次正常
-  const { FakeWS, instances } = makeWs((ws, idx) => {
-    if (idx === 0) {
-      ws.emitText({ event: 'ready', audio_id: 'aud-1', format: 'pcm', voice_id: 'mira' });
-      ws.emitText({ event: 'finish', code: 6, msg: 'no content' });
-      return;
-    }
-    okTtsScript(ws);
-  });
-
-  const logs = [];
-  const result = await say({
-    text: '念我',
-    via: 'auto',
-    token: TOKEN,
-    fetchImpl: server.fetchImpl,
-    webSocketImpl: FakeWS,
-    waitTimeoutMs: 3000,
-    log: (s) => logs.push(s),
-  });
-
-  assert.equal(result.scratch.via, 'reply', '应该落到 reply');
-  assert.equal(result.scratch.attempts, 2);
-  assert.equal(instances.length, 2, '应该连了两次 ws');
-  assert.ok(result.scratch.problems.some((p) => p.via === 'user' && p.stage === 'tts'), '要记下 user 那次为什么失败');
-  assert.ok(logs.some((l) => /换 reply/.test(l)));
-  // 两个会话都该被清掉
-  assert.equal(callsTo(server.calls, '/chat_session/delete').length, 2);
-});
-
-test('say(via=user)：念不了就直接抛，不偷偷换', async () => {
-  const server = makeServer({ messagesFor: () => [{ message_id: 'u-1', role: 1, content: '念我' }] });
-  const { FakeWS } = makeWs((ws) => {
+  const { FakeWS, instances } = makeWs((ws) => {
     ws.emitText({ event: 'ready', audio_id: 'a', format: 'pcm', voice_id: 'mira' });
     ws.emitText({ event: 'finish', code: 6, msg: 'no content' });
   });
   await assert.rejects(
-    say({ text: '念我', via: 'user', token: TOKEN, fetchImpl: server.fetchImpl, webSocketImpl: FakeWS, waitTimeoutMs: 3000 }),
+    say({ text: '念我', token: TOKEN, fetchImpl: server.fetchImpl, webSocketImpl: FakeWS, waitTimeoutMs: 3000 }),
     (err) => {
       assert.equal(err.code, 6);
       return true;
     },
   );
+  assert.equal(instances.length, 1, '只连一次 ws，没有第二遍');
   // 失败也要清干净
   assert.equal(callsTo(server.calls, '/chat_session/delete').length, 1);
 });
 
 test('say：塞消息那步就失败时，会话照样被清掉', async () => {
-  const server = makeServer({ messagesFor: () => [{ message_id: 'x', role: 2, content: '别的' }] });
+  // 模型一直不回，putText 会超时
+  const server = makeServer({
+    messagesFor: () => [{ message_id: 'u-1', role: 1, content: buildRepeatPrompt('念我') }],
+  });
   const { FakeWS } = makeWs(okTtsScript);
   await assert.rejects(
     say({
       text: '念我',
-      via: 'user',
       token: TOKEN,
       fetchImpl: server.fetchImpl,
       webSocketImpl: FakeWS,
@@ -463,7 +410,7 @@ test('say：没有 token 直接 auth 错，一个请求都不发', async () => {
   const server = makeServer();
   const { FakeWS } = makeWs(okTtsScript);
   await assert.rejects(
-    say({ text: 'x', via: 'user', fetchImpl: server.fetchImpl, webSocketImpl: FakeWS }),
+    say({ text: 'x', fetchImpl: server.fetchImpl, webSocketImpl: FakeWS }),
     (e) => e.kind === 'auth',
   );
   assert.equal(server.calls.length, 0);
