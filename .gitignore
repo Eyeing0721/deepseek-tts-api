@@ -1,10 +1,13 @@
-node_modules/
+﻿node_modules/
 *.wav
 *.pcm
+*.mp3
+*.opus
 .env
 .env.*
 !.env.example
-*.mp3
-*.opus
 .recon/
 npm-debug.log*
+
+# npm pack 的产物：构建产物不该进仓库，Release 里挂一份就够
+*.tgz

@@ -634,3 +634,42 @@ max_volume: -7.9 dB
 - `--via user` 被拒是**这台账号 + 当前服务端版本**的行为，换版本可能变（`auto` 就是防这个的）。
 - 指纹头依然不伪造，这一轮服务端也没要。
 - 续传、opus 分帧语义还是没验；错误码 4（额度）/ 5（限流）没触发过。
+
+---
+
+# 隔天复跑（2026-09-14，同一个版本，重新取 token）
+
+上面那轮跑完之后没有改过任何协议代码（只动了 package.json 版本号和 .gitignore），
+隔了几小时重新取了一次 token 再跑，确认不是一次性的运气：
+
+```
+$ dstts probe
+1) 音色接口 GET /api/v0/chat/tts/voices  OK（490ms）
+   mira 29 种 / echo 29 种 / stella 10 种 / tide 10 种
+2) 取票 POST /api/v0/auth/ticket  OK（36ms）  票 36 字符  expires_in_secs=600
+3) 空 id 试连 握手没成  close code=1006
+
+$ dstts say "状态确认，这是刚才重新跑的一遍。" --via reply -o live-check.wav
+  会话 f2ae5ced-0bcc-4493-955f-1a6391277044 建好了
+  PoW 解出来了：answer=60028，试了 60029 次，算 434ms（含取 challenge 共 518ms）
+  message_id=2，SSE 读了 1.1 KiB
+  ws 已连接
+  已删掉临时会话 f2ae5ced-0bcc-4493-955f-1a6391277044
+  合成 OK：32 帧 / 148.4 KiB / 3.17s  voice=mira format=pcm
+  实际念到的正文："状态确认，这是刚才重新跑的一遍。"
+  总耗时 3529ms
+
+$ ffprobe live-check.wav
+codec_name=pcm_s16le / sample_rate=24000 / channels=1 / duration=3.165125
+$ ffmpeg -i live-check.wav -af volumedetect -f null -
+mean_volume: -22.6 dB / max_volume: -7.9 dB
+```
+
+三点值得记：
+
+1. **`--via reply` 是 3.5 秒**，比默认 `auto` 的 7.1 秒快一倍 —— 省掉的是"先撞一次
+   `code=6`、再建第二个会话、再解一次 PoW"。
+2. 这次 PoW 难度落在 60029 次 / 434ms，上一轮是 97691 次 / 735ms。**难度是每轮变的**，
+   不是固定值。
+3. `answer` 每次都不同但都小于 `difficulty`，说明 `difficulty` 确实是**搜索上界**
+   而不是前导零个数 —— 第 6 条那个判断得到第二次印证。

@@ -1,6 +1,6 @@
 {
   "name": "deepseek-tts-api",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "非官方 DeepSeek 网页版朗读（TTS）客户端：WebSocket 协议实现 + CLI",
   "type": "module",
   "license": "MIT",
