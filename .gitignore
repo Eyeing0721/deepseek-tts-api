@@ -11,3 +11,7 @@ npm-debug.log*
 
 # npm pack 的产物：构建产物不该进仓库，Release 里挂一份就够
 *.tgz
+
+# 写 README 时整理的素材，不是给用户看的
+README-素材.md
+*素材*.md
