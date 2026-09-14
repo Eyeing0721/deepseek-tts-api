@@ -1,274 +1,612 @@
 # deepseek-tts-api
 
-DeepSeek 网页版「朗读」的非官方客户端和命令行。零运行时依赖，Node >= 22 直接跑喵。
+DeepSeek 网页版「朗读」的非官方客户端 + CLI。
+点个star谢谢喵
 
-还没发到 npm，两种用法：
+> 把 DeepSeek 网页上的朗读功能，搬到命令行里。
+
+Node 包 + CLI，命令名：
 
 ```bash
-npx github:Eyeing0721/deepseek-tts-api voices    # 不装，直接从 GitHub 跑
-node bin/dstts.mjs voices                         # 或者 clone 下来跑
+dstts
 ```
+
+当前版本：`0.2.0`
+
+环境要求：**Node.js >= 22**
+
+运行时零依赖，直接用 Node 自带的 `fetch` 和 `WebSocket`。
+
+[GitHub](https://github.com/Eyeing0721/deepseek-tts-api) · [个人主页 / 打赏](https://0721.luxe/) · [@Eyeing0721](https://github.com/Eyeing0721)
+
+---
+
+## 能拿来干嘛
+
+```bash
+# 看音色
+dstts voices
+
+# 下载试听
+dstts demo mira -o 试听.mp3
+
+# 检查账号
+dstts probe
+
+# 直接念一段文字
+dstts say "今天辛苦了，早点睡。"
+
+# 念已经聊过的某条回答
+dstts read --session <id> --message <id>
+
+# PCM 封成 WAV
+dstts wav in.pcm out.wav
+```
+
+就这么简单。
+
+---
 
 ## 上手
 
+### 直接跑
+
+现在 npm 还没发布，所以先从 GitHub 跑：
+
 ```bash
-npm install -g .
+# 不用安装，直接跑
+npx github:Eyeing0721/deepseek-tts-api voices
 ```
 
-Node >= 22（用的是自带的 `fetch` 和 `WebSocket`，没装第三方依赖）。
+也可以全局装：
 
-然后设登录态。登录 `chat.deepseek.com`，开 DevTools 跑一句：
+```bash
+npm install -g .
+dstts voices
+```
+
+或者克隆下来：
+
+```bash
+node bin/dstts.mjs voices
+```
+
+---
+
+## 登录态
+
+需要一个 `userToken`。
+
+登录 [chat.deepseek.com](https://chat.deepseek.com)，按 `F12` 打开 DevTools。
+
+Mac：
+
+```text
+Option + Command + I
+```
+
+打开 Console / 控制台，输入：
 
 ```js
 JSON.parse(localStorage.getItem('userToken')).value
 ```
 
-拿到一串 64 字符的东西，喂给它：
+拿到的就是 `userToken`。
 
-```bash
-export DS_TOKEN='那串东西'      # bash
-$env:DS_TOKEN = '那串东西'      # PowerShell
+它是一串 **64 字符的字符串**。
+
+Console 不让粘贴的时候，先手打：
+
+```text
+allow pasting
 ```
 
-也可以临时用 `--token`。只从环境变量和 `--token` 读，不写文件、不打日志、不碰你的浏览器数据喵。
+回车，再贴上面的代码。
 
-试一下通不通：
+### 怎么传
 
-```bash
-dstts probe
-```
-
-## 三个常用命令
+bash / macOS：
 
 ```bash
-dstts voices                          # 看四个音色
-dstts demo mira -o mira.mp3           # 下试听
-dstts say "今天天气不错，适合睡觉。" -o out.wav    # 念一段你写的文本
+export DS_TOKEN='那串东西'
 ```
 
-`say` 是重点，往下翻。
+Windows PowerShell：
 
-## voices / demo
+```powershell
+$env:DS_TOKEN = '那串东西'
+```
+
+也可以直接：
+
+```bash
+dstts voices --token <值>
+```
+
+所有命令都需要登录态，包括 `voices` 和 `demo`。
+
+token 只从 `DS_TOKEN` 和 `--token` 读，不写文件，也不打进日志。
+
+---
+
+## 音色
+
+目前有这几只：
+
+| ID       | 中文名 | 英文名    | 性别     | 描述   | 语言 |
+| -------- | --- | ------ | ------ | ---- | -: |
+| `mira`   | 贝壳  | Mira   | female | 百变活泼（可以唱歌） | 29 |
+| `echo`   | 白浪  | Echo   | male   | 明朗坚定 | 29 |
+| `stella` | 海星  | Stella | female | 俏皮甜美 | 10 |
+| `tide`   | 暗潮  | Tide   | male   | 低沉浑厚 | 10 |
+
+默认是：
+
+```text
+mira
+```
+
+海星和暗潮支持：
+
+```text
+ar en id ja ko ms th vi yue zh
+```
+
+还带粤语。
+
+---
+
+## voices
+
+看看现在有哪些音色：
 
 ```bash
 dstts voices
-dstts demo mira -o mira.mp3
-dstts demo tide -o tide.mp3
 ```
 
-四个音色：
+想拿 JSON：
 
-| voice_id | 中文名 | 性别 | 描述 | 语言数 |
-|---|---|---|---|---|
-| `mira` | 贝壳 | 女 | 百变活泼 | 29（默认） |
-| `echo` | 白浪 | 男 | 明朗坚定 | 29 |
-| `stella` | 海星 | 女 | 俏皮甜美 | 10 |
-| `tide` | 暗潮 | 男 | 低沉浑厚 | 10 |
+```bash
+dstts voices --json
+```
 
-海星/暗潮支持的是 `ar en id ja ko ms th vi yue zh` 这 10 种。
+输出大概这样：
 
-试听是 CDN 上的 mp3，文件名形如 `<音色>_<语言>.<哈希>.mp3`，每个组合一份、哈希各不相同，
-拼不出来。地址统一从 `dstts voices` 的列表里拿。
+```text
+音色列表（官方接口 /api/v0/chat/tts/voices）
+默认 mira   当前 mira
+
+  mira     贝壳   female  百变活泼   29 种语言  试听 29 个  (默认)
+  echo     白浪   male    明朗坚定   29 种语言  试听 29 个
+  stella   海星   female  俏皮甜美   10 种语言  试听 10 个
+  tide     暗潮   male    低沉浑厚   10 种语言  试听 10 个
+```
+
+---
+
+## demo
+
+想先听听某个音色长什么样：
+
+```bash
+dstts demo mira -o 试听.mp3
+```
+
+指定语言：
+
+```bash
+dstts demo tide --lang yue -o 粤语试听.mp3
+```
+
+不写 `-o` 的话，默认文件名：
+
+```text
+demo-<音色>-<语言>.mp3
+```
+
+---
 
 ## probe
+
+先测一下账号这边能不能正常走：
 
 ```bash
 dstts probe
 ```
 
-依次打音色列表、取票、试连一次 ws，最后给一句判决，每一步的耗时都打出来。失败也是报告里的一行，不抛栈。
-
-不给 `--session` / `--message` 时，试连用的是空 id，只能证明票和端点是通的：
+也可以带上会话和消息：
 
 ```bash
-dstts probe --session <会话id> --message <消息id>
+dstts probe --session <id> --message <id>
 ```
 
-加上会话和消息才是真正的判定。退出码 1 表示用不了，`--json` 出结构化报告。
+会依次检查音色、票据和 WebSocket，然后给结果。
+
+```bash
+dstts probe --json
+```
+
+还能直接拿结构化结果。
+
+---
 
 ## say
 
+最适合日常玩的就是这个。
+
 ```bash
 dstts say "今天天气不错，适合睡觉。"
+```
+
+换音色：
+
+```bash
 dstts say "念这句" --voice tide -o tide.wav
+```
+
+想把临时会话留下：
+
+```bash
 dstts say "别删会话" --keep
 ```
 
-合成的请求里只有 `chat_session_id` 和 `message_id`，没有正文——读什么由服务端拿这两个 id
-去你会话里查。所以 `say` 会现场造一个一次性会话，把文本塞进去，拿到 id 去念，念完删掉。
+也能调等待时间和 PoW：
 
-```
-建会话 → 取 PoW challenge → 解工作量证明 → 让模型复述一遍
-      → 拉 history 拿到 message_id → 合成 → 删会话
+```bash
+dstts say "..." --wait 60000 --max-iterations 5000000
 ```
 
-为什么要多一道「复述」：服务端**不肯念用户消息**（`code=6 NO_CONTENT`），只能念模型的消息。
-所以发进去的是一句「请把下面这句话原样复述一遍」，念的是它复述出来的那条。
-这一步是自动的，你不用管。
+额外请求头：
 
-整条链路大概 3 秒出头（短句），长文本按音频时长线性涨，一秒音频约 0.2 秒。
+```bash
+dstts say "..." --header "名字: 值"
+```
 
-`--voice` 切音色，`-o` 指定输出，`--format opus|pcm`。默认念完删掉临时会话，`--keep` 留着。
-要加自定义请求头用 `--header "名字: 值"`。
+`--header` 可以重复传。
 
-### 关于那个工作量证明
+默认输出：
 
-`/api/v0/chat/completion` 强制要 PoW，官方前端解不出来是直接不发请求的。
-算法叫 `DeepSeekHashV1`，是 DeepSeek 自己的一套哈希，`node:crypto` 替代不了。
-`test/pow.test.mjs` 里有 13 组从产物 worker 跑出来的 golden vector，改了立刻红。
-细节和坑在 `docs/PROTOCOL.md`。
+```text
+ds-say-<时间戳>.wav
+```
 
-难度每轮不一样，实测在 5 万到 13 万次迭代之间，本地做题 300~900ms。
+### 它是怎么念出来的
+
+DeepSeek 的 TTS 接口只接收：
+
+```text
+chat_session_id
+message_id
+```
+
+服务端会自己根据这两个 id 找内容。
+
+同时，它只念**模型消息**，用户自己发的那条消息不能直接拿去合成。
+
+所以 `say` 会先建一个临时会话，让模型把你给的文字原样复述出来：
+
+```text
+请把下面这段文字原样输出一遍，不要翻译、不要总结、不要解释、不要加引号或任何前后缀，一个字都不要改：
+
+<你给的文本>
+```
+
+拿到模型消息的 `message_id` 后，再交给 TTS。
+
+整个过程：
+
+```text
+建会话
+→ 解 PoW
+→ 发复述提示语
+→ 拉 history
+→ 拿 message_id
+→ 合成
+→ 删掉临时会话
+```
+
+所以你写：
+
+```bash
+dstts say "今天早点睡"
+```
+
+它真的会自己走完这一整套，然后给你一个可以直接播放的 WAV。
+
+---
 
 ## read
 
+已经有会话和消息了，就直接读：
+
 ```bash
 dstts read --session <会话id> --message <消息id> -o out.wav
-dstts read --session <id> --message <id> --voice tide --format pcm -o tide.wav
 ```
 
-- `--session`：会话 id，网页端 URL 里 `/a/chat/s/<uuid>` 那一段。
-- `--message`：那条消息的 `message_id`。
-- `--voice`：传了就先切音色（服务端会话级状态）。
-- `--format`：`pcm`（默认）或 `opus`。
-- 不写 `-o` 默认输出 `ds-tts-<message_id>.wav`。
+换音色：
 
-pcm 出来自动套好 44 字节 WAV 头（24kHz / 单声道 / s16le），拿来就能播。
-opus 是裸包没有容器，多数播放器打不开，想听就用 pcm。
+```bash
+dstts read --session <id> --message <id> --voice tide --format pcm
+```
 
-### wav
+其中：
+
+* `session` 是网页 URL 里的 `/a/chat/s/<uuid>` 那一段
+* `message` 是对应消息的 `message_id`
+
+不写 `-o`：
+
+```text
+ds-tts-<message_id>.wav
+```
+
+---
+
+## wav
+
+裸 PCM 套个 WAV 头：
 
 ```bash
 dstts wav in.pcm out.wav
+```
+
+默认：
+
+```text
+24000 Hz
+单声道
+16 bit
+```
+
+也可以自己指定：
+
+```bash
 dstts wav in.pcm out.wav --rate 16000 --channels 2
 ```
 
-本地 PCM 套头的小工具。长度不是 `blockAlign` 整数倍会直接报错。
+长度对不上 `blockAlign` 的话会直接报错。
 
-## 当库用
+---
+
+## 通用选项
+
+| 选项               | 说明                                 |
+| ---------------- | ---------------------------------- |
+| `-o, --out <路径>` | 输出文件                               |
+| `--format <格式>`  | `pcm`（默认）或 `opus`                  |
+| `--voice <id>`   | 切换音色                               |
+| `--token <值>`    | userToken                          |
+| `--timeout <ms>` | 超时，默认 `read=90000` / `probe=15000` |
+| `--json`         | JSON 输出                            |
+| `-h, --help`     | 帮助                                 |
+| `--version`      | 版本                                 |
+
+---
+
+## 错误码
+
+真遇到报错，CLI 会直接给中文提示，对着看就好：
+
+|    码 | 名字                           | 中文                                |
+| ---: | ---------------------------- | --------------------------------- |
+|  `0` | `SUCCESS`                    | —                                 |
+|  `1` | `INTERNAL_ERROR`             | 服务端内部错误                           |
+|  `2` | `INVALID_INPUT`              | 请求参数不对（会话 id / 消息 id 大概率是错的）      |
+|  `3` | `SERVICE_ERROR`              | 服务端业务异常                           |
+|  `4` | `QUOTA_EXCEEDED`             | 朗读额度用完了（今日限额）                     |
+|  `5` | `RATE_LIMIT_REACHED`         | 请求太频繁，被限流了                        |
+|  `6` | `NO_CONTENT`                 | 这条消息没有可朗读的正文                      |
+|  `7` | `UNSUPPORTED_LANGUAGE`       | 当前语言不支持朗读                         |
+|  `8` | `VOICE_UNSUPPORTED_LANGUAGE` | 这个音色不支持当前语言                       |
+|  `9` | `NOT_AVAILABLE`              | 服务端未对该账号放行（NOT_AVAILABLE，灰测/地区限制） |
+| `10` | `RESUME_EXPIRED`             | 续传票据过期了                           |
+| `11` | `FORBIDDEN`                  | 被拒绝（FORBIDDEN）                    |
+| `12` | `CONTENT_FILTER`             | 内容被安全过滤挡了                         |
+
+另外还有：
+
+```text
+auth：
+缺少登录态：没有 userToken（DS_TOKEN 环境变量和 --token 都是空的）。取 userToken 的办法见 README 的「上手」一节
+```
+
+以及普通参数错误：
+
+```text
+参数错误：不认识的选项：--via
+```
+
+---
+
+## 几个小提醒
+
+### 票是一次性的
+
+票有效期是 `600` 秒，而且只能用一次。
+
+所以每次建立 WebSocket 之前，程序都会重新取票。
+
+### 朗读目前正在公测
+账号是否能用，由服务端决定。
+
+碰到：
+
+```text
+code=9 NOT_AVAILABLE
+```
+
+或者：
+
+```text
+code=11 FORBIDDEN
+```
+
+就是当前账号没拿到权限。
+
+### opus 是裸 Opus
+
+`format=opus` 拿到的是裸 Opus 包，没有 Ogg 容器。
+
+想拿来直接播放，默认用 `pcm` 就行。它会自动封成 WAV。
+
+### say 会建临时会话
+
+每次 `say` 都会创建一个临时会话。
+
+默认念完就删，`--keep` 可以留下。
+
+### PoW 会占一点时间
+
+每次合成前都要做一次工作量证明。
+
+一般大约：
+
+```text
+300 ~ 900ms
+```
+
+默认最多算：
+
+```text
+5000000 次
+```
+
+---
+
+## 性能
+
+实测大概是这个感觉：
+
+| 命令                                |          耗时 |
+| --------------------------------- | ----------: |
+| `dstts voices`                    |      0.22 s |
+| `dstts probe`                     |      0.26 s |
+| `dstts say` 短句（11 字 → 1.8s 音频）    | 3.2 ~ 4.2 s |
+| `dstts say` 长文本（101 字 → 19.0s 音频） |       7.1 s |
+| `npx github:... help` 首次运行        |      11.1 s |
+
+短句主要是固定流程占时间。
+
+长一点的文本，整体会快不少。
+
+---
+
+## Node 里直接用
 
 ```js
 import { writeFile } from 'node:fs/promises';
 import { synthesize, pcmToWav } from 'deepseek-tts-api';
 
-const result = await synthesize({
+const r = await synthesize({
   sessionId: '...',
-  messageId: '...',
-  format: 'pcm',
-  // token 不给就读 DS_TOKEN
+  messageId: '...'
 });
 
-console.log(result.frameCount, result.bytes, result.durationSec, result.voiceId);
-
-await writeFile('out.wav', pcmToWav(result.audio));
+await writeFile('out.wav', pcmToWav(r.audio));
 ```
 
-`synthesize()` 返回的东西（节选）：
+不传 token 的话，会直接读：
 
-```js
-{
-  audio,            // Buffer，按 seq 排好拼起来的音频
-  format,           // 服务端实际给的格式，以它为准
-  requestedFormat,
-  bytes, frameCount, firstSeq, lastSeq, missingSeqs,
-  duplicates, outOfOrder, contiguous,
-  sampleRate, channels, bitsPerSample, samples, durationSec,   // pcm 才有
-  voiceId, audioId, traceId, finish, events, acksSent, warnings,
-}
+```text
+DS_TOKEN
 ```
 
-其它导出：
+`synthesize()` 会返回音频、帧信息、票据、会话信息等完整结果。
+
+流式播放也可以：
 
 ```js
-import { issueTicket, listVoices, setVoice, resolveDemoUrl, probeProtocol } from 'deepseek-tts-api';
-
-const { ticket, expiresInSecs } = await issueTicket({ token });
-const { voices, defaultVoiceId, currentVoiceId } = await listVoices({ token });
-await setVoice({ voiceId: 'tide', token });
-const report = await probeProtocol({ token, log: console.log });
+onChunk: (buf) => play(buf)
 ```
 
-一边收一边处理用 `onChunk`，按 seq 顺序回调：
+常用导出：
 
-```js
-await synthesize({ sessionId, messageId, onChunk: (buf) => play(buf) });
+```text
+issueTicket
+listVoices
+setVoice
+resolveDemoUrl
+probeProtocol
+createSession
+deleteSession
+fetchMessages
+putText
+say
+pcmToWav
+wavHeader
+parseWavHeader
+DeepSeekTtsError
+ErrorCode
+codeName
+codeHint
+VOICES
+PCM
+FORMATS
+TOKEN_ENV
+parseArgv
 ```
 
-出错都是 `DeepSeekTtsError`，带 `kind` 和 `code`：
+错误统一是：
 
 ```js
-try { await synthesize({ ... }) }
 catch (e) {
-  e.kind;      // usage | auth | protocol | transport | network
-  e.code;      // 协议错误码 0-12，没有就是 undefined
-  e.codeName;  // 'NOT_AVAILABLE' 这种
+  e.kind;
+  e.code;
+  e.codeName;
   e.describe();
 }
 ```
 
-## 得知道的几件事
+---
 
-**票是一次性的。** 600 秒有效，但只能用一次。同一张票第二次建 ws 会被 1006 断开，零帧、没有任何错误信息。每次建连前都重新取票。
+## 项目结构
 
-**服务端只念模型的消息。** 用户消息一律 `code=6 NO_CONTENT`，所以 `say` 中间必须让模型复述一遍。
-
-**账号可能压根没被放行。** `code=9 NOT_AVAILABLE` / `11 FORBIDDEN`，灰测和地区都有可能。跑 `probe` 看。
-
-**别的错误码**：`4 QUOTA_EXCEEDED` 额度、`5 RATE_LIMIT_REACHED` 限流、`12 CONTENT_FILTER` 内容过滤。
-
-**指纹头不伪造。** 官方前端还带 `x-hif-leim` / `x-hif-dliq` / `x-client-*`，这个包不发。服务端要的话用 `--header` 自己塞。
-
-**opus 无言容器。** 裸 Opus 包，不是 Ogg。
-
-**没验到的**：额度/限流错误码没触发过，断线续传没试，opus 每包多少采样没确认。完整清单在 `VERIFY.md`。
-
-## 目录
-
-```
-bin/dstts.mjs          CLI，只做参数 -> 调库 -> 打印
-src/constants.mjs      端点、音色表、错误码、pcm 参数
-src/http.mjs           取票 / 音色列表 / 切音色 / 下 demo
-src/frames.mjs         4 字节大端 seq 解析、收帧器、ws 地址
+```text
+bin/dstts.mjs          CLI
+src/constants.mjs      端点、音色表、错误码、PCM 参数
+src/http.mjs           取票 / 音色列表 / 切音色 / demo
+src/frames.mjs         WebSocket 帧处理
 src/tts.mjs            synthesize()
-src/wav.mjs            PCM -> WAV
+src/wav.mjs            PCM → WAV
 src/probe.mjs          probeProtocol()
-src/deepseek-hash.mjs  DeepSeekHashV1
-src/pow.mjs            取 challenge / 解 PoW / 拼 X-DS-PoW-Response
-src/session.mjs        建一次性会话、塞文本、say() 编排
-src/cli-args.mjs       参数解析（纯函数，能单独测）
-test/                  node --test，126 个用例
+src/deepseek-hash.mjs  PoW 哈希
+src/pow.mjs            Challenge / PoW
+src/session.mjs        会话与 say()
+src/cli-args.mjs       参数解析
+src/errors.mjs         错误码与中文提示
+src/index.mjs          导出
+
+test/                  测试
 docs/PROTOCOL.md       协议细节
-VERIFY.md              本机跑过的验证记录，含原始输出
+VERIFY.md              验证记录
 ```
 
-## 测试
+---
 
-```bash
-npm test        # 就是 node --test
+## 许可证
+
+MIT
+
+版权：
+
+```text
+Eyeing0721
 ```
 
-126 个用例，不需要网络也不需要 token。WAV 头是拿纸笔算出来的期望字节逐一比的；
-4 字节大端 seq 的乱序、重复、缺帧都有覆盖；`synthesize()` 用假 WebSocket + 假 fetch
-把服务端演了一遍；PoW 有 13 组 golden vector 和 120 组随机串对拍。
+仅供个人学习和技术研究
 
-Node 25 起 `node --test test/` 不再接受目录参数，直接 `node --test`。
+---
 
-## 关于我喵
+## 觉得好玩就点个 Star
 
-我是 [@Eyeing0721](https://github.com/Eyeing0721)，主页在 **https://0721.luxe/**，
-折腾的东西和写过的帖都堆在那儿。
+这个项目折腾了不少细节，觉得有点意思的话，帮忙点个 ⭐ Star。
 
-这个包是我自己要用才写的——想把会话里的回答批量读出来做素材，官方只给了个按钮，
-那就自己拆。写着写着觉得还挺顺手，就整理出来放这儿了。
+Star 对作者来说真的很有用，更新的时候也更有动力。
 
-要是它帮你省了点事，来主页请我喝杯奶茶喵 🐟
+[⭐ GitHub](https://github.com/Eyeing0721/deepseek-tts-api)
 
-## 免责
+也可以来我的主页逛逛：
 
-非官方，跟 DeepSeek 没有任何关系，也没得到他们认可。
+**https://0721.luxe/**
 
-协议是逆向出来的，官方一改前端、换接口、上更严的风控，这个包就废了。
-仅供个人学习和技术研究，别拿去批量滥用——额度、限流、内容过滤都是服务端说了算，
-账号被封跟我没关系。用之前看一眼 DeepSeek 的服务条款，自己判断。
-
-MIT，版权 Eyeing0721。
+喜欢的话，顺手请我喝杯奶茶也好呀。
