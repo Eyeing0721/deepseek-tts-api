@@ -8,15 +8,13 @@
  * 流程：
  *   1. POST /api/v0/chat_session/create            -> chat_session.id
  *   2. POST /api/v0/chat/create_pow_challenge      -> challenge（必须解，见 pow.mjs）
- *   3. POST /api/v0/chat/completion                -> 把文本作为一条用户消息发进去（SSE 流）
- *   4. GET  /api/v0/chat/history_messages          -> 找到那条消息的 message_id
+ *   3. POST /api/v0/chat/completion                -> 发一句"请复述下面这段话"（SSE 流）
+ *   4. GET  /api/v0/chat/history_messages          -> 找到模型那条回复的 message_id
  *   5. 交给 synthesize() 去念
  *   6. POST /api/v0/chat_session/delete            -> 删掉会话
  *
- * 两种取 id 的路子：
- *   - via='user'  只等我们自己发的那条用户消息落库，然后就把生成掐掉。便宜、而且念的就是原文。
- *   - via='reply' 等模型把话说完，拿回复那条。念的是模型复述出来的东西，可能不完全一致。
- * 哪种真能念，得拿真账号试（见 VERIFY.md 里没验证的部分）。
+ * 为什么不能直接把原文发进去念：服务端只念模型的消息，拿用户消息去合成会被
+ * code=6 NO_CONTENT 顶回来。所以中间必须让模型复述一遍，念它复述出来的那条。
  */
 
 import { ENDPOINTS, HTTP_BASE } from './constants.mjs';
