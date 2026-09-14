@@ -156,7 +156,7 @@ export async function probeProtocol({
       '缺少登录态：没有 userToken。取票、列真实音色、合成这三步全都需要它。',
     );
     line('判决：用不了 —— 缺少登录态。');
-    line('  设 DS_TOKEN 或者传 --token 再来。怎么拿 token 见 README 的「登录态」一节。');
+    line('  设 DS_TOKEN 或者传 --token 再来。怎么拿 token 见 README 的「登录一次就好」一节。');
     line('  本包不会去读你的浏览器 cookie / localStorage / LevelDB，这活你自己做。');
     report.elapsedMs = Date.now() - started;
     return report;
