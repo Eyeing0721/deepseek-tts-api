@@ -41,7 +41,7 @@ export function looksLikeToken(token) {
 /** 缺 token 的提示只写一份，库和 CLI 都从这拿，免得同一个错两种说法。 */
 export const MISSING_TOKEN_MESSAGE =
   '缺少登录态：没有 userToken（DS_TOKEN 环境变量和 --token 都是空的）。' +
-  '取 userToken 的办法见 README 的「登录一次就好」一节 —— 本包不会去读你的浏览器数据。';
+  '取 userToken 的办法见 README 的「上手」一节 —— 本包不会去读你的浏览器数据。';
 
 export function assertToken(token) {
   if (!token) throw authError(MISSING_TOKEN_MESSAGE);
