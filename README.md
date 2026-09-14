@@ -581,7 +581,6 @@ src/index.mjs          导出
 
 test/                  测试
 docs/PROTOCOL.md       协议细节
-VERIFY.md              验证记录
 ```
 
 ---

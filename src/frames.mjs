@@ -88,7 +88,7 @@ export function buildTtsUrl({
  *
  * seq 从几开始？官方状态机里 `receivedSeq` 初值是 -1、`receivedCount = receivedSeq + 1`，
  * 也就是它按 0 开始计数。所以正常流是 0,1,2,...。不过这里不写死起点：第一帧的 seq 就是基准，
- * 后面必须严格 +1，这样起点是 0 还是 1 都能过（真实起点我们没能拿到线上抓包确认，见 VERIFY.md）。
+ * 后面必须严格 +1，这样起点是 0 还是 1 都能过（真实起点没抓到线上包确认过）。
  *
  * 往外吐（onChunk）的前提是「到达顺序 = seq 顺序」。WebSocket 跑在 TCP 上，本来就是有序的，
  * 所以第一帧一到就直接吐。万一真有迟到帧，它会被压住并记进 outOfOrder / pendingSeqs，

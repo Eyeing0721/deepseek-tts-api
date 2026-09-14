@@ -497,7 +497,7 @@ X-DS-PoW-Response: base64(JSON.stringify({
 
 本包在 `src/deepseek-hash.mjs` 里把它照抄了一遍，并且**拿产物自己的 worker 逐位对拍过**：
 13 组 golden vector 全中，另加 120 组随机串全中；拿本包的哈希出题，产物的 JS worker 和
-WASM worker 各解出 10/10（见 `VERIFY.md`）。
+WASM worker 各解出 10/10。这些向量固化在 `test/pow.test.mjs` 里。
 
 ### 塞进去的那条必须让模型复述
 

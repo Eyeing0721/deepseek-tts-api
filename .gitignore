@@ -15,3 +15,6 @@ npm-debug.log*
 # 写 README 时整理的素材，不是给用户看的
 README-素材.md
 *素材*.md
+
+# 验证记录是本地的东西，不进仓库
+VERIFY.md
