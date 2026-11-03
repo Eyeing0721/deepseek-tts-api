@@ -185,7 +185,16 @@ export async function fetchMessages({
 export function messageText(m) {
   const c = m?.content ?? m?.text;
   if (typeof c === 'string') return c;
-  if (c === null || c === undefined) return '';
+  if (c === null || c === undefined) {
+    // 2026-11 协议改版：正文挪进了 fragments 数组（[{type:"RESPONSE",content:"..."}]）
+    const frags = m?.fragments;
+    if (Array.isArray(frags)) {
+      return frags
+        .map((f) => (typeof f?.content === 'string' ? f.content : ''))
+        .join('');
+    }
+    return '';
+  }
   return JSON.stringify(c);
 }
 
